@@ -1,0 +1,29 @@
+asset:
+  symbol: "BTC/USDT"
+  timeframe: "1m"
+  exchange: "binance"
+  fetch_limit: 1500
+
+runtime:
+  cycle_interval_seconds: 60
+  max_cycles: 100
+  warmup_bars: 50
+  report_path: "reports/mvp_report.md"
+
+simulation:
+  initial_equity: 10000.0
+  slippage_bps: 5
+  long_threshold: 0.55
+  short_threshold: 0.45
+  optimization_interval_cycles: 10
+  sharpe_trigger: 1.5
+  optuna_trials: 15
+  replay_buffer_limit: 10000
+
+api_keys:
+  polygon_api_key: ""
+  ccxt_api_key: ""
+  ccxt_api_secret: ""
+
+logging:
+  level: "INFO"
