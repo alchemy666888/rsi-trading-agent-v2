@@ -46,9 +46,11 @@ def write_markdown_report(state: AgentState) -> Path:
         "If RSI rises above 55, long probability tends to increase.",
     )
     optimization_events = state.get("optimization_events", [])
+    walk_forward_metrics = performance.get("walk_forward_metrics", {})
+    feature_importances = state.get("feature_importances", [])
 
     lines = [
-        "# Weekend MVP Trading Agent Report",
+        "# Week 1 Trading Agent Report (LightGBM + Walk-Forward)",
         "",
         f"- Generated (UTC): {datetime.now(timezone.utc).isoformat()}",
         f"- Asset: {config['asset']['symbol']}",
@@ -68,9 +70,73 @@ def write_markdown_report(state: AgentState) -> Path:
         "",
         f"- {shap_rule}",
         "",
-        "## Optimization Events",
+        "## Walk-Forward Backtest",
         "",
     ]
+
+    if walk_forward_metrics:
+        settings = walk_forward_metrics.get("settings", {})
+        lines.extend(
+            [
+                f"- Train Bars: {settings.get('train_bars', 'n/a')}",
+                f"- Test Bars: {settings.get('test_bars', 'n/a')}",
+                f"- Step Bars: {settings.get('step_bars', 'n/a')}",
+                "",
+                "| Mode | Mean Sharpe | Mean Max Drawdown | Mean Total Return | Mean Accuracy | Folds |",
+                "|---|---:|---:|---:|---:|---:|",
+            ]
+        )
+        for mode in ["expanding", "rolling"]:
+            mode_metrics = walk_forward_metrics.get(mode, {})
+            lines.append(
+                "| "
+                f"{mode.title()} | "
+                f"{float(mode_metrics.get('mean_sharpe', 0.0)):.4f} | "
+                f"{float(mode_metrics.get('mean_max_drawdown', 0.0)) * 100.0:.2f}% | "
+                f"{float(mode_metrics.get('mean_total_return', 0.0)) * 100.0:.2f}% | "
+                f"{float(mode_metrics.get('mean_accuracy', 0.0)) * 100.0:.2f}% | "
+                f"{len(mode_metrics.get('folds', []))} |"
+            )
+        overall = walk_forward_metrics.get("overall", {})
+        lines.extend(
+            [
+                "",
+                "- Overall:",
+                f"  - Mean Sharpe: {float(overall.get('mean_sharpe', 0.0)):.4f}",
+                f"  - Mean Max Drawdown: {float(overall.get('mean_max_drawdown', 0.0)) * 100.0:.2f}%",
+                f"  - Mean Total Return: {float(overall.get('mean_total_return', 0.0)) * 100.0:.2f}%",
+                f"  - Mean Accuracy: {float(overall.get('mean_accuracy', 0.0)) * 100.0:.2f}%",
+                "",
+            ]
+        )
+    else:
+        lines.extend(["- Walk-forward metrics not available yet.", ""])
+
+    lines.extend(
+        [
+            "## Top 10 LightGBM Feature Importances",
+            "",
+        ]
+    )
+    if feature_importances:
+        lines.extend(["| Rank | Feature | Importance |", "|---:|---|---:|"])
+        for rank, item in enumerate(feature_importances[:10], start=1):
+            lines.append(
+                "| "
+                f"{rank} | "
+                f"{item.get('feature', 'n/a')} | "
+                f"{float(item.get('importance', 0.0)):.4f} |"
+            )
+        lines.append("")
+    else:
+        lines.extend(["- Feature importances not available.", ""])
+
+    lines.extend(
+        [
+        "## Optimization Events",
+        "",
+        ]
+    )
 
     if optimization_events:
         lines.extend(
@@ -104,6 +170,9 @@ def build_initial_state(config: dict[str, Any]) -> AgentState:
         "position": 0,
         "previous_position": 0,
         "last_action": "HOLD",
+        "lightgbm_model": None,
+        "feature_columns": [],
+        "feature_importances": [],
         "equity": float(config["simulation"]["initial_equity"]),
         "equity_curve": [],
         "returns": [],
@@ -119,6 +188,7 @@ def build_initial_state(config: dict[str, Any]) -> AgentState:
             "max_drawdown": 0.0,
             "win_rate": 0.0,
             "total_return": 0.0,
+            "walk_forward_metrics": {},
         },
         "shap_rule": "",
     }

@@ -17,6 +17,7 @@ class Performance(TypedDict):
     max_drawdown: float
     win_rate: float
     total_return: float
+    walk_forward_metrics: dict[str, Any]
 
 
 class AgentState(TypedDict, total=False):
@@ -34,6 +35,9 @@ class AgentState(TypedDict, total=False):
     previous_position: int
     position: int
     entry_price: float | None
+    lightgbm_model: Any
+    feature_columns: list[str]
+    feature_importances: list[dict[str, Any]]
 
     equity: float
     equity_curve: list[float]

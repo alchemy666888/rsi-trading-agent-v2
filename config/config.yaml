@@ -8,7 +8,7 @@ runtime:
   cycle_interval_seconds: 60
   max_cycles: 100
   warmup_bars: 50
-  report_path: "reports/mvp_report.md"
+  report_path: "reports/week1_report.md"
 
 simulation:
   initial_equity: 10000.0
@@ -19,6 +19,26 @@ simulation:
   sharpe_trigger: 1.5
   optuna_trials: 15
   replay_buffer_limit: 10000
+
+model:
+  train_split_ratio: 0.7
+  min_train_rows: 400
+  n_estimators: 200
+  learning_rate: 0.05
+  num_leaves: 63
+  max_depth: -1
+  min_child_samples: 20
+  subsample: 0.85
+  colsample_bytree: 0.85
+  random_state: 42
+  n_jobs: -1
+  walk_forward_n_estimators: 120
+
+walk_forward:
+  train_bars: 400
+  test_bars: 100
+  step_bars: 50
+  interval_cycles: 10
 
 api_keys:
   polygon_api_key: ""
