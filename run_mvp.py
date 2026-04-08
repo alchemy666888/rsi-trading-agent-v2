@@ -49,6 +49,11 @@ def write_markdown_report(state: AgentState) -> Path:
     walk_forward_metrics = performance.get("walk_forward_metrics", {})
     feature_importances = state.get("feature_importances", [])
 
+    # Walk-forward metrics are the trustworthy out-of-sample measure
+    wf_overall = walk_forward_metrics.get("overall", {}) if walk_forward_metrics else {}
+    wf_sharpe = float(wf_overall.get("mean_sharpe", 0.0))
+    wf_accuracy = float(wf_overall.get("mean_accuracy", 0.0)) * 100.0
+
     lines = [
         "# Week 1 Trading Agent Report (LightGBM + Walk-Forward)",
         "",
@@ -57,7 +62,14 @@ def write_markdown_report(state: AgentState) -> Path:
         f"- Timeframe: {config['asset']['timeframe']}",
         f"- Completed Cycles: {state.get('cycle_count', 0)}",
         "",
-        "## Performance",
+        "## Out-of-Sample Performance (Walk-Forward)",
+        "",
+        "| Metric | Value |",
+        "|---|---:|",
+        f"| WF Mean Sharpe | {wf_sharpe:.4f} |",
+        f"| WF Mean Accuracy | {wf_accuracy:.2f}% |",
+        "",
+        "## Live Simulation Performance (post-training data only)",
         "",
         "| Metric | Value |",
         "|---|---:|",
