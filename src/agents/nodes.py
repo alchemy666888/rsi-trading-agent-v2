@@ -599,7 +599,19 @@ def _compute_performance(
     mean_return = float(returns_array.mean())
     std_return = float(returns_array.std(ddof=1)) if len(returns_array) > 1 else 0.0
     annualization = math.sqrt(365 * 24 * 60)  # 1m BTC bars
-    sharpe = (mean_return / std_return) * annualization if std_return > 1e-12 else 0.0
+
+    # Annualised Sharpe is unreliable with fewer than 1 000 bars; the √525 600
+    # scaling factor turns near-zero variance into extreme values.  Report 0.0
+    # and emit a warning so callers know the metric is not meaningful yet.
+    if len(returns_array) < 1000:
+        LOGGER.warning(
+            "_compute_performance: only %d return samples — Sharpe unreliable (need ≥ 1000). "
+            "Increase max_cycles or fetch more historical data.",
+            len(returns_array),
+        )
+        sharpe = 0.0
+    else:
+        sharpe = (mean_return / std_return) * annualization if std_return > 1e-12 else 0.0
 
     equity_array = np.array([initial_equity] + equity_curve, dtype=float)
     rolling_max = np.maximum.accumulate(equity_array)
@@ -901,9 +913,10 @@ def data_node(state: AgentState) -> AgentState:
             _train_lightgbm_baseline(historical_data, config)
         )
 
-        # Start simulation AFTER training data + 60-bar gap to avoid
+        # Start simulation AFTER training data + 61-bar gap to avoid
         # in-sample evaluation and temporal leakage from lagged features.
-        embargo_gap = 60
+        # Lag stack extends to lag-60, so the minimum safe embargo is max_lag+1=61.
+        embargo_gap = 61
         cursor = split_idx + embargo_gap
         if cursor >= historical_data.height - 2:
             cursor = split_idx  # fallback: at least skip training data
