@@ -398,7 +398,21 @@ def _build_features(raw_df: pl.DataFrame) -> pl.DataFrame:
         )
     )
 
-    # Clean NaN/nulls while preserving timestamp and dt
+    # Drop warmup rows where long-lookback indicators are still NaN.
+    # The longest rolling window is 240 bars (volatility regime mean);
+    # dropping the first 250 rows eliminates misleading 0-filled warmup data.
+    warmup_drop = 250
+    rows_before = feature_df.height
+    if feature_df.height > warmup_drop + 200:
+        feature_df = feature_df.slice(warmup_drop, feature_df.height - warmup_drop)
+        LOGGER.info(
+            "Dropped %s warmup rows (%s -> %s) to avoid NaN-fill distortion.",
+            warmup_drop,
+            rows_before,
+            feature_df.height,
+        )
+
+    # Fill any remaining sporadic NaN/nulls (e.g. from cross-asset features)
     float_cols = [
         col
         for col, dtype in feature_df.schema.items()
@@ -430,8 +444,13 @@ def _get_model_feature_columns(feature_df: pl.DataFrame) -> list[str]:
 def _train_lightgbm_baseline(
     feature_df: pl.DataFrame,
     config: dict[str, Any],
-) -> tuple[lgb.LGBMClassifier, list[str], list[dict[str, Any]]]:
-    """# Week 1 upgrade: quick baseline model train-once for live cycle predictions."""
+) -> tuple[lgb.LGBMClassifier, list[str], list[dict[str, Any]], int]:
+    """# Week 1 upgrade: quick baseline model train-once for live cycle predictions.
+
+    Returns (model, feature_columns, feature_importances, split_idx) where
+    split_idx is the first row NOT used in training so the simulation can
+    start after a gap to avoid in-sample evaluation.
+    """
     model_cfg = config.get("model", {})
     feature_cols = _get_model_feature_columns(feature_df)
 
@@ -480,7 +499,7 @@ def _train_lightgbm_baseline(
         split_idx,
         len(feature_cols),
     )
-    return model, feature_cols, feature_importances
+    return model, feature_cols, feature_importances, split_idx
 
 
 def _load_historical_btc_data(config: dict[str, Any]) -> pl.DataFrame:
@@ -778,9 +797,9 @@ def _run_walk_forward_backtest(state: AgentState) -> dict[str, Any]:
             short_threshold = float(state.get("strategy_params", {}).get("short_threshold", sim_cfg["short_threshold"]))
 
             entries = probs > long_threshold
-            exits = probs < 0.5
+            exits = probs < short_threshold
             short_entries = probs < short_threshold
-            short_exits = probs > 0.5
+            short_exits = probs > long_threshold
 
             pf = vbt.Portfolio.from_signals(
                 close=close_test,
@@ -878,16 +897,23 @@ def data_node(state: AgentState) -> AgentState:
     historical_data = state.get("historical_data")
     if historical_data is None:
         historical_data = _load_historical_btc_data(config)
-        model, feature_columns, feature_importances = _train_lightgbm_baseline(
-            historical_data, config
+        model, feature_columns, feature_importances, split_idx = (
+            _train_lightgbm_baseline(historical_data, config)
         )
 
-        cursor = int(config["runtime"]["warmup_bars"])
+        # Start simulation AFTER training data + 60-bar gap to avoid
+        # in-sample evaluation and temporal leakage from lagged features.
+        embargo_gap = 60
+        cursor = split_idx + embargo_gap
+        if cursor >= historical_data.height - 2:
+            cursor = split_idx  # fallback: at least skip training data
         current_row = historical_data.row(cursor, named=True)
         features_df = historical_data.slice(cursor, 1)
         LOGGER.info(
-            "Data node initialized with %s rows; warmup cursor=%s.",
+            "Data node initialized with %s rows; train split=%s, embargo=%s, cursor=%s.",
             historical_data.height,
+            split_idx,
+            embargo_gap,
             cursor,
         )
         return {
