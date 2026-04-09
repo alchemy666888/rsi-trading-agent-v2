@@ -903,8 +903,59 @@ def _run_walk_forward_backtest(state: AgentState) -> dict[str, Any]:
 
 
 def update_lora_adapter(_: AgentState) -> None:
-    # MVP stub: keeps the LoRA update hook in place from day one.
-    LOGGER.info("LoRA adapter update hook executed (MVP dummy).")
+    # TODO: Week 4 — implement LoRA adapter fine-tuning via PEFT/Dagster pipeline.
+    LOGGER.warning("update_lora_adapter called but not yet implemented (Week 4 stub).")
+
+
+def risk_node(state: AgentState) -> AgentState:
+    """Week 2 upgrade: standalone risk management node.
+
+    Sits between predict_node and decision_node.  Computes risk_params:
+      - stop_triggered: bool  — True if current position exceeded stop-loss threshold.
+      - regime_factor: float  — Multiplier applied to threshold distance from 0.5;
+                                >1 widens the neutral band (more confidence required in
+                                volatile markets before entering a trade).
+      - atr_pct: float        — Current ATR-14 as a fraction of price (slippage proxy).
+    """
+    row = state["current_row"]
+    prediction = state["prediction"]
+    config = state["config"]
+    sim_cfg = config["simulation"]
+
+    close = _safe_float(row.get("close"), 1.0)
+    atr_14 = _safe_float(row.get("atr_14"), 0.0)
+    regime = str(prediction.get("regime", "normal"))
+
+    # Stop-loss: force flat if adverse PnL on open position exceeds threshold.
+    entry_price = state.get("entry_price")
+    current_position = int(state.get("position", 0))
+    stop_triggered = False
+    if entry_price is not None and current_position != 0 and close > 0.0:
+        pnl_pct = (close - float(entry_price)) / float(entry_price) * current_position
+        stop_loss_pct = float(sim_cfg.get("stop_loss_pct", 0.02))
+        if pnl_pct < -stop_loss_pct:
+            stop_triggered = True
+            LOGGER.info(
+                "Stop-loss triggered: position=%s entry=%.4f current=%.4f pnl=%.4f",
+                current_position,
+                float(entry_price),
+                close,
+                pnl_pct,
+            )
+
+    # In high-volatility regime, widen the neutral band so only high-confidence
+    # signals get through (regime_factor > 1 pulls thresholds away from 0.5).
+    regime_factor = 1.3 if regime == "high_volatility" else 1.0
+
+    atr_pct = atr_14 / close if close > 0.0 else 0.0
+
+    return {
+        "risk_params": {
+            "stop_triggered": stop_triggered,
+            "regime_factor": regime_factor,
+            "atr_pct": atr_pct,
+        }
+    }
 
 
 def append_to_replay_buffer(state: AgentState) -> list[dict[str, Any]]:
@@ -1003,6 +1054,7 @@ def predict_node(state: AgentState) -> AgentState:
 def decision_node(state: AgentState) -> AgentState:
     prediction = state["prediction"]
     config = state["config"]
+    risk_params = state.get("risk_params", {})
     params = state.get(
         "strategy_params",
         {
@@ -1013,33 +1065,68 @@ def decision_node(state: AgentState) -> AgentState:
 
     prob_up = float(prediction["prob_up"])
     previous_position = int(state.get("position", 0))
+    current_row = state["current_row"]
+    trades = list(state.get("trades", []))
+
+    # Risk override: stop-loss forces position flat regardless of signal.
+    if risk_params.get("stop_triggered", False):
+        if previous_position != 0:
+            trades.append(
+                {
+                    "cycle": int(state.get("cycle_count", 0)) + 1,
+                    "timestamp": int(current_row["timestamp"]),
+                    "action": "HOLD",
+                    "new_position": 0,
+                    "price": float(current_row["close"]),
+                    "prob_up": prob_up,
+                    "trigger": "stop_loss",
+                }
+            )
+        return {
+            "last_action": "HOLD",
+            "previous_position": previous_position,
+            "position": 0,
+            "entry_price": None,
+            "trades": trades,
+        }
+
+    # Regime-aware threshold: widen the neutral band in volatile markets.
+    # regime_factor > 1 requires higher confidence before entering a trade.
+    regime_factor = float(risk_params.get("regime_factor", 1.0))
+    base_long = float(params["long_threshold"])
+    base_short = float(params["short_threshold"])
+    effective_long = 0.5 + (base_long - 0.5) * regime_factor
+    effective_short = 0.5 - (0.5 - base_short) * regime_factor
+
     position = previous_position
     action = "HOLD"
 
-    if prob_up > float(params["long_threshold"]):
+    if prob_up > effective_long:
         position = 1
         action = "LONG"
-    elif prob_up < float(params["short_threshold"]):
+    elif prob_up < effective_short:
         position = -1
         action = "SHORT"
 
-    trades = list(state.get("trades", []))
+    entry_price = state.get("entry_price")
     if position != previous_position:
         trades.append(
             {
                 "cycle": int(state.get("cycle_count", 0)) + 1,
-                "timestamp": int(state["current_row"]["timestamp"]),
+                "timestamp": int(current_row["timestamp"]),
                 "action": action,
                 "new_position": position,
-                "price": float(state["current_row"]["close"]),
+                "price": float(current_row["close"]),
                 "prob_up": prob_up,
             }
         )
+        entry_price = float(current_row["close"]) if position != 0 else None
 
     return {
         "last_action": action,
         "previous_position": previous_position,
         "position": position,
+        "entry_price": entry_price,
         "trades": trades,
     }
 
