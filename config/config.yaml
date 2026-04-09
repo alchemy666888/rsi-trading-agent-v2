@@ -2,13 +2,16 @@ asset:
   symbol: "BTC/USDT"
   timeframe: "1m"
   exchange: "binance"
-  fetch_limit: 1500
+  fetch_limit: 5000
+  # Set to a CSV path (timestamp,open,high,low,close,volume) to skip live fetch.
+  # Remove or leave blank to fetch from the exchange when network is available.
+  local_cache_path: "data/btc_1m_synthetic.csv"
 
 runtime:
   cycle_interval_seconds: 60
-  max_cycles: 100
+  max_cycles: 1100
   warmup_bars: 50
-  report_path: "reports/week1_report.md"
+  report_path: "reports/week2_report.md"
 
 simulation:
   initial_equity: 10000.0
@@ -35,10 +38,10 @@ model:
   walk_forward_n_estimators: 120
 
 walk_forward:
-  train_bars: 400
+  train_bars: 800
   test_bars: 100
-  step_bars: 50
-  interval_cycles: 10
+  step_bars: 200
+  interval_cycles: 500
 
 api_keys:
   polygon_api_key: ""
