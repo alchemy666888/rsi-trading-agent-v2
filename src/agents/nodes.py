@@ -505,6 +505,23 @@ def _train_lightgbm_baseline(
 def _load_historical_btc_data(config: dict[str, Any]) -> pl.DataFrame:
     asset_cfg = config["asset"]
     api_cfg = config.get("api_keys", {})
+    fetch_limit = int(asset_cfg["fetch_limit"])
+
+    # Local CSV cache: use when network is unavailable or for reproducible runs.
+    # CSV must have columns: timestamp,open,high,low,close,volume
+    local_cache = asset_cfg.get("local_cache_path", "")
+    if local_cache:
+        import pathlib
+        cache_path = pathlib.Path(local_cache)
+        if cache_path.exists():
+            LOGGER.info("Loading data from local cache: %s", cache_path)
+            raw_df = pl.read_csv(cache_path).sort("timestamp")
+            # Trim to fetch_limit rows (most recent)
+            if raw_df.height > fetch_limit:
+                raw_df = raw_df.tail(fetch_limit)
+            LOGGER.info("Loaded %s rows from local cache.", raw_df.height)
+            return _build_features(raw_df)
+        LOGGER.warning("Local cache path configured but not found: %s — falling back to exchange.", cache_path)
 
     exchange_name = asset_cfg["exchange"]
     exchange_cls = getattr(ccxt, exchange_name)
@@ -518,7 +535,7 @@ def _load_historical_btc_data(config: dict[str, Any]) -> pl.DataFrame:
     ohlcv = exchange.fetch_ohlcv(
         symbol=asset_cfg["symbol"],
         timeframe=asset_cfg["timeframe"],
-        limit=int(asset_cfg["fetch_limit"]),
+        limit=fetch_limit,
     )
     if not ohlcv:
         raise RuntimeError("No OHLCV rows returned from exchange.")
@@ -759,6 +776,8 @@ def _run_walk_forward_backtest(state: AgentState) -> dict[str, Any]:
     train_bars = int(walk_cfg.get("train_bars", 400))
     test_bars = int(walk_cfg.get("test_bars", 100))
     step_bars = int(walk_cfg.get("step_bars", 50))
+    # Must match data_node() embargo: lag stack extends to lag-60, so min safe gap is max_lag+1=61.
+    embargo_gap = 61
 
     x_all = data.select(feature_cols).to_numpy()
     y_all = data["target_up"].to_numpy().astype(int)
@@ -769,20 +788,21 @@ def _run_walk_forward_backtest(state: AgentState) -> dict[str, Any]:
         split_start = train_bars
         fold_idx = 0
 
-        while split_start + test_bars < len(data) - 1:
+        while split_start + embargo_gap + test_bars < len(data) - 1:
             if mode == "expanding":
                 train_start = 0
             else:
                 train_start = max(0, split_start - train_bars)
 
             train_end = split_start
-            test_end = split_start + test_bars
+            test_start = split_start + embargo_gap
+            test_end = test_start + test_bars
 
             x_train = x_all[train_start:train_end]
             y_train = y_all[train_start:train_end]
-            x_test = x_all[split_start:test_end]
-            y_test = y_all[split_start:test_end]
-            close_test = close_all[split_start:test_end]
+            x_test = x_all[test_start:test_end]
+            y_test = y_all[test_start:test_end]
+            close_test = close_all[test_start:test_end]
 
             if x_train.shape[0] < 50 or x_test.shape[0] < 10:
                 break
@@ -828,7 +848,7 @@ def _run_walk_forward_backtest(state: AgentState) -> dict[str, Any]:
                 "fold": fold_idx,
                 "train_start": train_start,
                 "train_end": train_end,
-                "test_start": split_start,
+                "test_start": test_start,
                 "test_end": test_end,
                 "sharpe": _metric_float(pf.sharpe_ratio()),
                 "max_drawdown": abs(_metric_float(pf.max_drawdown())),
@@ -1079,8 +1099,12 @@ def optimize_node(state: AgentState) -> AgentState:
     optimize_every = int(config["simulation"]["optimization_interval_cycles"])
     sharpe_trigger = float(config["simulation"]["sharpe_trigger"])
 
+    # Only allow the Sharpe-trigger to fire once we have enough samples for a
+    # reliable Sharpe estimate (same threshold as _compute_performance guard).
+    returns_count = len(state.get("returns", []))
+    sharpe_is_reliable = returns_count >= 1000
     should_optimize = (cycle_count % optimize_every == 0) or (
-        float(performance["sharpe"]) < sharpe_trigger
+        sharpe_is_reliable and float(performance["sharpe"]) < sharpe_trigger
     )
     if not should_optimize:
         return {}

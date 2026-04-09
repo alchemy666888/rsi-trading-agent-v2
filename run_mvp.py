@@ -214,7 +214,7 @@ def main() -> None:
 
     graph = build_agent_graph()
     initial_state = build_initial_state(config)
-    final_state: AgentState = graph.invoke(initial_state, config={"recursion_limit": 1200})
+    final_state: AgentState = graph.invoke(initial_state, config={"recursion_limit": 15000})
 
     report_path = write_markdown_report(final_state)
     logger.info("MVP run complete. Cycles=%s", final_state.get("cycle_count", 0))
