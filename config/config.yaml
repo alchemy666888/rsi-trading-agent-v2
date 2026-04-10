@@ -39,14 +39,15 @@ model:
   random_state: 42
   n_jobs: -1
   walk_forward_n_estimators: 120
-  label_horizon: 1              # bars forward for target_up label; try 5 if WF accuracy stays < 51%
+  label_horizon: 1              # bars forward for target_up label
+  max_feature_lag: 60           # largest lag used in feature engineering (close/volume/ret_1/rsi/macd lags 1..60)
 
 walk_forward:
   train_bars: 800
   test_bars: 100
   step_bars: 200
   interval_cycles: 500
-  embargo_gap: 61               # must be >= max_lag + label_horizon + 1 (60 + 1 + 1 = 62 for horizon=1 is fine; update to 66 for horizon=5)
+  embargo_gap: 62               # must be >= max_feature_lag + label_horizon + 1 (default: 60 + 1 + 1 = 62; if horizon=5 => 66)
 
 api_keys:
   polygon_api_key: ""

@@ -293,6 +293,8 @@ _SHARED_CONFIG = {
         "colsample_bytree": 0.85,
         "random_state": 42,
         "n_jobs": 1,
+        "label_horizon": 1,
+        "max_feature_lag": 60,
     },
     "simulation": {
         "initial_equity": 10_000.0,
@@ -334,3 +336,9 @@ class TestWalkForwardBacktest:
         result = _run_walk_forward_backtest(self._make_state())
         assert len(result["expanding"]["folds"]) >= 1
         assert len(result["rolling"]["folds"]) >= 1
+
+    def test_raises_when_embargo_gap_below_required_threshold(self):
+        state = self._make_state()
+        state["config"]["walk_forward"]["embargo_gap"] = 61  # required is 60 + 1 + 1 = 62
+        with pytest.raises(ValueError, match="embargo_gap=.*too small.*60 \\+ 1 \\+ 1 = 62"):
+            _run_walk_forward_backtest(state)
