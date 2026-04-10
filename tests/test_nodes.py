@@ -285,6 +285,7 @@ _SHARED_CONFIG = {
         "train_bars": 100,
         "test_bars": 30,
         "step_bars": 50,
+        "embargo_gap": 62,
         "interval_cycles": 500,
     },
     "model": {
@@ -340,7 +341,7 @@ class TestWalkForwardBacktest:
 
     @pytest.fixture
     def deterministic_state(self) -> dict:
-        n = 220
+        n = 360
         t = np.arange(n, dtype=float)
         close = 50_000.0 + 10.0 * t + 200.0 * np.sin(t / 4.0)
         feat = np.sin(t / 5.0)
@@ -353,7 +354,7 @@ class TestWalkForwardBacktest:
                 "train_bars": 80,
                 "test_bars": 20,
                 "step_bars": 30,
-                "embargo_gap": 10,
+                "embargo_gap": 62,
                 "interval_cycles": 500,
             },
             "simulation": {
@@ -373,16 +374,22 @@ class TestWalkForwardBacktest:
         result = _run_walk_forward_backtest(deterministic_state)
 
         expected_expanding = [
-            (0, 80, 90, 110),
-            (0, 110, 120, 140),
-            (0, 140, 150, 170),
-            (0, 170, 180, 200),
+            (0, 80, 142, 162),
+            (0, 110, 172, 192),
+            (0, 140, 202, 222),
+            (0, 170, 232, 252),
+            (0, 200, 262, 282),
+            (0, 230, 292, 312),
+            (0, 260, 322, 342),
         ]
         expected_rolling = [
-            (0, 80, 90, 110),
-            (30, 110, 120, 140),
-            (60, 140, 150, 170),
-            (90, 170, 180, 200),
+            (0, 80, 142, 162),
+            (30, 110, 172, 192),
+            (60, 140, 202, 222),
+            (90, 170, 232, 252),
+            (120, 200, 262, 282),
+            (150, 230, 292, 312),
+            (180, 260, 322, 342),
         ]
 
         expanding_bounds = [
@@ -437,13 +444,13 @@ class TestDataNode:
         )
 
         split_idx = 120
-        embargo_gap = 9
+        embargo_gap = 62
 
         def _fake_load_historical_data(_config):
-            return historical_data
+            return historical_data, {"data_source": "test"}
 
         def _fake_train_baseline(_historical_data, _config):
-            return object(), ["feat"], {"feat": 1.0}, split_idx
+            return object(), ["feat"], [{"feature": "feat", "importance": 1.0}], split_idx
 
         monkeypatch.setattr(nodes, "_load_historical_btc_data", _fake_load_historical_data)
         monkeypatch.setattr(nodes, "_train_lightgbm_baseline", _fake_train_baseline)
@@ -459,8 +466,27 @@ class TestDataNode:
         expected_cursor = split_idx + embargo_gap
         assert result["cursor"] == expected_cursor
         assert result["cursor"] > split_idx
+
     def test_raises_when_embargo_gap_below_required_threshold(self):
-        state = self._make_state()
-        state["config"]["walk_forward"]["embargo_gap"] = 61  # required is 60 + 1 + 1 = 62
+        n = 250
+        df = pl.DataFrame(
+            {
+                "close": np.linspace(50_000.0, 51_000.0, n),
+                "feat": np.sin(np.arange(n) / 10.0),
+                "target_up": np.where(np.arange(n) % 2 == 0, 1, 0),
+            }
+        )
+        state = {
+            "historical_data": df,
+            "feature_columns": ["feat"],
+            "config": {
+                **_SHARED_CONFIG,
+                "walk_forward": {
+                    **_SHARED_CONFIG["walk_forward"],
+                    "embargo_gap": 61,  # required is 60 + 1 + 1 = 62
+                },
+            },
+            "strategy_params": {"long_threshold": 0.55, "short_threshold": 0.45},
+        }
         with pytest.raises(ValueError, match="embargo_gap=.*too small.*60 \\+ 1 \\+ 1 = 62"):
             _run_walk_forward_backtest(state)
