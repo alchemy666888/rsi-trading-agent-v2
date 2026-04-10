@@ -927,6 +927,7 @@ def _run_walk_forward_backtest(state: AgentState) -> dict[str, Any]:
         if not folds:
             return {
                 "folds": [],
+                "fold_count": 0,
                 "mean_sharpe": 0.0,
                 "mean_max_drawdown": 0.0,
                 "mean_total_return": 0.0,
@@ -935,6 +936,7 @@ def _run_walk_forward_backtest(state: AgentState) -> dict[str, Any]:
 
         return {
             "folds": folds,
+            "fold_count": len(folds),
             "mean_sharpe": float(np.mean([fold["sharpe"] for fold in folds])),
             "mean_max_drawdown": float(np.mean([fold["max_drawdown"] for fold in folds])),
             "mean_total_return": float(np.mean([fold["total_return"] for fold in folds])),
@@ -954,6 +956,16 @@ def _run_walk_forward_backtest(state: AgentState) -> dict[str, Any]:
         ),
         "mean_accuracy": float(np.mean([expanding["mean_accuracy"], rolling["mean_accuracy"]])),
     }
+    total_folds = int(expanding.get("fold_count", 0)) + int(rolling.get("fold_count", 0))
+    if total_folds == 0:
+        LOGGER.warning(
+            "Walk-forward produced zero folds (train=%s, test=%s, step=%s, embargo=%s, rows=%s).",
+            train_bars,
+            test_bars,
+            step_bars,
+            embargo_gap,
+            len(data),
+        )
 
     return {
         "settings": {
@@ -961,6 +973,7 @@ def _run_walk_forward_backtest(state: AgentState) -> dict[str, Any]:
             "test_bars": test_bars,
             "step_bars": step_bars,
             "embargo_gap": embargo_gap,
+            "total_folds": total_folds,
             "slippage_bps": float(sim_cfg.get("slippage_bps", 0.0)),
             "funding_rate_per_8h": float(sim_cfg.get("funding_rate_per_8h", 0.0)),
         },
@@ -1274,6 +1287,23 @@ def optimize_node(state: AgentState) -> AgentState:
         return {}
 
     best_params, best_score = _run_optuna_tune(state)
+    previous_params = state.get("strategy_params", {})
+    max_step = float(config["simulation"].get("max_threshold_step", 0.05))
+    if previous_params:
+        prev_long = float(previous_params.get("long_threshold", best_params["long_threshold"]))
+        prev_short = float(previous_params.get("short_threshold", best_params["short_threshold"]))
+        best_params["long_threshold"] = min(
+            0.90,
+            max(0.50, max(prev_long - max_step, min(prev_long + max_step, best_params["long_threshold"]))),
+        )
+        best_params["short_threshold"] = min(
+            0.50,
+            max(0.10, max(prev_short - max_step, min(prev_short + max_step, best_params["short_threshold"]))),
+        )
+        if best_params["short_threshold"] >= best_params["long_threshold"]:
+            midpoint = (best_params["short_threshold"] + best_params["long_threshold"]) / 2.0
+            best_params["short_threshold"] = max(0.10, midpoint - 0.02)
+            best_params["long_threshold"] = min(0.90, midpoint + 0.02)
     shap_rule = _derive_shap_rule(state)
     update_lora_adapter(state)
     replay_buffer = append_to_replay_buffer(state)

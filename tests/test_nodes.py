@@ -285,6 +285,7 @@ _SHARED_CONFIG = {
         "train_bars": 100,
         "test_bars": 30,
         "step_bars": 50,
+        "embargo_gap": 62,
         "interval_cycles": 500,
     },
     "model": {
@@ -341,6 +342,7 @@ class TestWalkForwardBacktest:
     @pytest.fixture
     def deterministic_state(self) -> dict:
         n = 283
+        n = 360
         t = np.arange(n, dtype=float)
         close = 50_000.0 + 10.0 * t + 200.0 * np.sin(t / 4.0)
         feat = np.sin(t / 5.0)
@@ -381,12 +383,18 @@ class TestWalkForwardBacktest:
             (0, 110, 172, 192),
             (0, 140, 202, 222),
             (0, 170, 232, 252),
+            (0, 200, 262, 282),
+            (0, 230, 292, 312),
+            (0, 260, 322, 342),
         ]
         expected_rolling = [
             (0, 80, 142, 162),
             (30, 110, 172, 192),
             (60, 140, 202, 222),
             (90, 170, 232, 252),
+            (120, 200, 262, 282),
+            (150, 230, 292, 312),
+            (180, 260, 322, 342),
         ]
 
         expanding_bounds = [
@@ -441,13 +449,13 @@ class TestDataNode:
         )
 
         split_idx = 120
-        embargo_gap = 9
+        embargo_gap = 62
 
         def _fake_load_historical_data(_config):
             return historical_data, {"data_source": "test"}
 
         def _fake_train_baseline(_historical_data, _config):
-            return object(), ["feat"], {"feat": 1.0}, split_idx
+            return object(), ["feat"], [{"feature": "feat", "importance": 1.0}], split_idx
 
         monkeypatch.setattr(nodes, "_load_historical_btc_data", _fake_load_historical_data)
         monkeypatch.setattr(nodes, "_train_lightgbm_baseline", _fake_train_baseline)
@@ -464,6 +472,7 @@ class TestDataNode:
         expected_cursor = split_idx + embargo_gap
         assert result["cursor"] == expected_cursor
         assert result["cursor"] > split_idx
+
     def test_raises_when_embargo_gap_below_required_threshold(self):
         # _make_state lives on TestWalkForwardBacktest; build a minimal state here.
         rng = np.random.default_rng(42)
@@ -472,6 +481,14 @@ class TestDataNode:
         feat = rng.standard_normal(n)
         target_up = (np.diff(close, prepend=close[0]) > 0).astype(int)
         df = pl.DataFrame({"close": close, "feat": feat, "target_up": target_up})
+        n = 250
+        df = pl.DataFrame(
+            {
+                "close": np.linspace(50_000.0, 51_000.0, n),
+                "feat": np.sin(np.arange(n) / 10.0),
+                "target_up": np.where(np.arange(n) % 2 == 0, 1, 0),
+            }
+        )
         state = {
             "historical_data": df,
             "feature_columns": ["feat"],
