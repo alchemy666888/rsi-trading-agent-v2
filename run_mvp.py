@@ -54,6 +54,47 @@ def save_shap_rules(rules: list[str]) -> None:
     SHAP_RULES_PATH.write_text(json.dumps(rules, indent=2), encoding="utf-8")
 
 
+def evaluate_readiness(state: AgentState) -> dict[str, Any]:
+    cfg = state.get("config", {}).get("readiness", {})
+    min_returns = int(cfg.get("min_returns_for_sharpe", 1000))
+    min_walk_forward_folds = int(cfg.get("min_walk_forward_folds", 5))
+    require_positive_wf_sharpe = bool(cfg.get("require_positive_wf_sharpe", True))
+
+    returns_count = len(state.get("returns", []))
+    wf = state.get("performance", {}).get("walk_forward_metrics", {})
+    expanding_folds = len(wf.get("expanding", {}).get("folds", []))
+    rolling_folds = len(wf.get("rolling", {}).get("folds", []))
+    overall_sharpe = float(wf.get("overall", {}).get("mean_sharpe", 0.0))
+
+    reasons: list[str] = []
+    if returns_count < min_returns:
+        reasons.append(f"Insufficient returns for reliable Sharpe: {returns_count} < {min_returns}.")
+    if max(expanding_folds, rolling_folds) < min_walk_forward_folds:
+        reasons.append(
+            "Insufficient walk-forward folds: "
+            f"expanding={expanding_folds}, rolling={rolling_folds}, "
+            f"required at least {min_walk_forward_folds} in one mode."
+        )
+    if require_positive_wf_sharpe and overall_sharpe <= 0.0:
+        reasons.append(f"Walk-forward mean Sharpe not positive: {overall_sharpe:.4f}.")
+
+    return {
+        "go_ahead": len(reasons) == 0,
+        "checks": {
+            "min_returns_for_sharpe": min_returns,
+            "min_walk_forward_folds": min_walk_forward_folds,
+            "require_positive_wf_sharpe": require_positive_wf_sharpe,
+        },
+        "observed": {
+            "returns_count": returns_count,
+            "expanding_folds": expanding_folds,
+            "rolling_folds": rolling_folds,
+            "wf_mean_sharpe": overall_sharpe,
+        },
+        "reasons": reasons,
+    }
+
+
 def write_markdown_report(state: AgentState) -> Path:
     config = state["config"]
     report_path = PROJECT_ROOT / str(config["runtime"]["report_path"])
@@ -77,6 +118,7 @@ def write_markdown_report(state: AgentState) -> Path:
     model_hyperparameters = run_metadata.get("model_hyperparameters", {})
     strategy_params = state.get("strategy_params", {})
     returns_count = len(state.get("returns", []))
+    readiness = state.get("readiness", {})
 
     # Walk-forward metrics are the trustworthy out-of-sample measure
     wf_overall = walk_forward_metrics.get("overall", {}) if walk_forward_metrics else {}
@@ -222,10 +264,33 @@ def write_markdown_report(state: AgentState) -> Path:
 
     lines.extend(
         [
-        "## Optimization Events",
+        "## Readiness Gate",
+        "",
+        f"- GO_AHEAD: **{bool(readiness.get('go_ahead', False))}**",
+        "",
+        "### Gate Checks",
+        "",
+        "```json",
+        json.dumps(readiness.get("checks", {}), indent=2, sort_keys=True),
+        "```",
+        "",
+        "### Observed",
+        "",
+        "```json",
+        json.dumps(readiness.get("observed", {}), indent=2, sort_keys=True),
+        "```",
+        "",
+        "### Gate Reasons",
         "",
         ]
     )
+    reasons = readiness.get("reasons", [])
+    if reasons:
+        for reason in reasons:
+            lines.append(f"- {reason}")
+    else:
+        lines.append("- All readiness checks passed.")
+    lines.extend(["", "## Optimization Events", ""])
 
     if optimization_events:
         lines.extend(
@@ -344,6 +409,7 @@ def main() -> None:
     final_rules = final_state.get("shap_rules", [])
     save_shap_rules(final_rules)
     logger.info("Saved %d SHAP rules to %s", len(final_rules), SHAP_RULES_PATH)
+    final_state["readiness"] = evaluate_readiness(final_state)
 
     report_path = write_markdown_report(final_state)
     logger.info("MVP run complete. Cycles=%s", final_state.get("cycle_count", 0))
