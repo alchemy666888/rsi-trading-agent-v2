@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import logging
+import hashlib
+import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -70,6 +72,11 @@ def write_markdown_report(state: AgentState) -> Path:
     optimization_events = state.get("optimization_events", [])
     walk_forward_metrics = performance.get("walk_forward_metrics", {})
     feature_importances = state.get("feature_importances", [])
+    run_metadata = state.get("run_metadata", {})
+    data_metadata = state.get("data_metadata", {})
+    model_hyperparameters = run_metadata.get("model_hyperparameters", {})
+    strategy_params = state.get("strategy_params", {})
+    returns_count = len(state.get("returns", []))
 
     # Walk-forward metrics are the trustworthy out-of-sample measure
     wf_overall = walk_forward_metrics.get("overall", {}) if walk_forward_metrics else {}
@@ -83,6 +90,22 @@ def write_markdown_report(state: AgentState) -> Path:
         f"- Asset: {config['asset']['symbol']}",
         f"- Timeframe: {config['asset']['timeframe']}",
         f"- Completed Cycles: {state.get('cycle_count', 0)}",
+        "",
+        "## Run Metadata",
+        "",
+        f"- Git Commit Hash: `{run_metadata.get('git_commit_hash', 'unknown')}`",
+        f"- Config Hash (SHA-256): `{run_metadata.get('config_hash', 'unknown')}`",
+        f"- Data Source: `{data_metadata.get('data_source', 'unknown')}`",
+        f"- Data File Path: `{data_metadata.get('data_file_path', 'unknown')}`",
+        f"- Data Row Count: {data_metadata.get('data_row_count', 'n/a')}",
+        f"- First Timestamp (UTC): {run_metadata.get('first_timestamp_utc', 'n/a')}",
+        f"- Last Timestamp (UTC): {run_metadata.get('last_timestamp_utc', 'n/a')}",
+        "",
+        "### Model Hyperparameters",
+        "",
+        "```json",
+        json.dumps(model_hyperparameters, indent=2, sort_keys=True),
+        "```",
         "",
         "## Out-of-Sample Performance (Walk-Forward)",
         "",
@@ -107,6 +130,16 @@ def write_markdown_report(state: AgentState) -> Path:
         "## Walk-Forward Backtest",
         "",
     ]
+
+    if returns_count < 1000:
+        lines.extend(
+            [
+                "> [!WARNING]",
+                f"> Reliability warning: only {returns_count} returns were observed. "
+                "Sharpe and related risk-adjusted metrics are unstable below 1,000 returns.",
+                "",
+            ]
+        )
 
     if walk_forward_metrics:
         settings = walk_forward_metrics.get("settings", {})
@@ -148,6 +181,17 @@ def write_markdown_report(state: AgentState) -> Path:
 
     lines.extend(
         [
+            "## Methodology",
+            "",
+            f"- Walk-Forward Train Bars: {walk_forward_metrics.get('settings', {}).get('train_bars', 'n/a')}",
+            f"- Walk-Forward Test Bars: {walk_forward_metrics.get('settings', {}).get('test_bars', 'n/a')}",
+            f"- Walk-Forward Step Bars: {walk_forward_metrics.get('settings', {}).get('step_bars', 'n/a')}",
+            f"- Walk-Forward Embargo Gap: {walk_forward_metrics.get('settings', {}).get('embargo_gap', config.get('walk_forward', {}).get('embargo_gap', 'n/a'))}",
+            f"- Trading Costs: slippage={config['simulation'].get('slippage_bps', 'n/a')} bps, "
+            f"funding_rate_per_8h={config['simulation'].get('funding_rate_per_8h', 0.0)}",
+            f"- Decision Thresholds: long={float(strategy_params.get('long_threshold', config['simulation']['long_threshold'])):.4f}, "
+            f"short={float(strategy_params.get('short_threshold', config['simulation']['short_threshold'])):.4f}",
+            "",
             "## Top 10 LightGBM Feature Importances",
             "",
         ]
@@ -242,6 +286,33 @@ def build_initial_state(config: dict[str, Any], prior_shap_rules: list[str]) -> 
     }
 
 
+def _get_git_commit_hash() -> str:
+    try:
+        return (
+            subprocess.check_output(
+                ["git", "rev-parse", "HEAD"],
+                cwd=PROJECT_ROOT,
+                text=True,
+            )
+            .strip()
+        )
+    except Exception:
+        return "unknown"
+
+
+def _compute_config_hash(config_path: Path) -> str:
+    payload = config_path.read_bytes()
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _to_utc_iso(timestamp_ms: Any) -> str:
+    try:
+        dt = datetime.fromtimestamp(int(timestamp_ms) / 1000.0, tz=timezone.utc)
+        return dt.isoformat()
+    except Exception:
+        return "n/a"
+
+
 def main() -> None:
     config_path = PROJECT_ROOT / "config" / "config.yaml"
     config = load_config(config_path)
@@ -254,7 +325,20 @@ def main() -> None:
 
     graph = build_agent_graph()
     initial_state = build_initial_state(config, prior_shap_rules)
+    initial_state["run_metadata"] = {
+        "git_commit_hash": _get_git_commit_hash(),
+        "config_hash": _compute_config_hash(config_path),
+        "model_hyperparameters": dict(config.get("model", {})),
+    }
     final_state: AgentState = graph.invoke(initial_state, config={"recursion_limit": 15000})
+    final_state["run_metadata"] = dict(initial_state["run_metadata"])
+    data_meta = final_state.get("data_metadata", {})
+    final_state["run_metadata"]["first_timestamp_utc"] = _to_utc_iso(
+        data_meta.get("first_timestamp_ms")
+    )
+    final_state["run_metadata"]["last_timestamp_utc"] = _to_utc_iso(
+        data_meta.get("last_timestamp_ms")
+    )
 
     # Persist accumulated SHAP rules for next session
     final_rules = final_state.get("shap_rules", [])
