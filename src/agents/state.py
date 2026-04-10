@@ -50,3 +50,4 @@ class AgentState(TypedDict, total=False):
     strategy_params: dict[str, float]
     optimization_events: list[dict[str, Any]]
     shap_rule: str
+    shap_rules: list[str]

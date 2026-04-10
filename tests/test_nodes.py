@@ -69,8 +69,14 @@ class TestComputePerformance:
         assert result["total_return"] == 0.0
 
     def test_all_positive_returns(self):
-        returns = [0.01, 0.02, 0.01, 0.03, 0.01]
-        equity_curve = [10_100.0, 10_302.0, 10_405.02, 10_717.17, 10_824.34]
+        # Need >= 1000 samples with non-zero std to produce a computable Sharpe.
+        # Use slightly varied positive returns so std > 0.
+        returns = [0.001 + 0.0001 * (i % 3 - 1) for i in range(1200)]
+        equity = 10_000.0
+        equity_curve = []
+        for r in returns:
+            equity *= 1 + r
+            equity_curve.append(equity)
         result = _compute_performance(returns, equity_curve, 10_000.0)
         assert result["sharpe"] > 0.0
         assert result["max_drawdown"] == 0.0  # no drawdown with all positive
@@ -91,18 +97,11 @@ class TestComputePerformance:
         assert result["max_drawdown"] > 0.0
 
     def test_sharpe_annualization(self):
-        """Sharpe should use sqrt(525600) annualization for 1-min bars."""
-        returns = [0.001] * 100
-        equity = 10_000.0
-        equity_curve = []
-        for r in returns:
-            equity *= 1 + r
-            equity_curve.append(equity)
+        """Sharpe should use sqrt(525600) annualization for 1-min bars.
 
-        result = _compute_performance(returns, equity_curve, 10_000.0)
-        # With constant returns, std is 0 (ddof=1 with identical values still 0)
-        # so sharpe would be 0 due to the guard clause... let's use slight variation
-        returns_varied = [0.001 + 0.0001 * (i % 3 - 1) for i in range(100)]
+        Must supply >= 1000 samples to pass _compute_performance's sample-size guard.
+        """
+        returns_varied = [0.001 + 0.0001 * (i % 3 - 1) for i in range(1200)]
         equity = 10_000.0
         equity_curve = []
         for r in returns_varied:
@@ -111,9 +110,7 @@ class TestComputePerformance:
 
         result = _compute_performance(returns_varied, equity_curve, 10_000.0)
         expected_annualization = math.sqrt(365 * 24 * 60)
-        # Sharpe should be positive (positive mean returns)
         assert result["sharpe"] > 0.0
-        # Verify the annualization is in the right ballpark
         raw_sharpe = np.mean(returns_varied) / np.std(returns_varied, ddof=1)
         assert result["sharpe"] == pytest.approx(
             raw_sharpe * expected_annualization, rel=1e-4

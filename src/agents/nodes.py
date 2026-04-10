@@ -282,8 +282,13 @@ def _build_multi_timeframe_features(
     return resampled.select(["dt"] + [col for col in resampled.columns if col.startswith(prefix)])
 
 
-def _build_features(raw_df: pl.DataFrame) -> pl.DataFrame:
-    """# Week 1 upgrade: 300+ engineered features for LightGBM baseline."""
+def _build_features(raw_df: pl.DataFrame, label_horizon: int = 1) -> pl.DataFrame:
+    """# Week 1 upgrade: 300+ engineered features for LightGBM baseline.
+
+    label_horizon controls how many bars forward the binary target_up label looks.
+    Increasing it (e.g. to 5) reduces noise in the label at the cost of requiring
+    a larger embargo gap (max_lag + label_horizon + 1).
+    """
     feature_df = raw_df.with_columns(
         [
             pl.from_epoch("timestamp", time_unit="ms").alias("dt"),
@@ -388,10 +393,13 @@ def _build_features(raw_df: pl.DataFrame) -> pl.DataFrame:
         ]
     )
 
-    # Binary next-bar target for LightGBM
+    # Binary forward-return target for LightGBM.
+    # label_horizon=1 (default) predicts whether the next bar closes higher.
+    # label_horizon=5 gives a less noisy signal at 1m resolution (try if WF accuracy stays < 51%).
+    # Note: embargo_gap in walk_forward config must be >= max_lag + label_horizon + 1.
     feature_df = feature_df.with_columns(
         (
-            (pl.col("close").shift(-1) > pl.col("close"))
+            (pl.col("close").shift(-label_horizon) > pl.col("close"))
             .cast(pl.Int8)
             .fill_null(0)
             .alias("target_up")
@@ -520,7 +528,8 @@ def _load_historical_btc_data(config: dict[str, Any]) -> pl.DataFrame:
             if raw_df.height > fetch_limit:
                 raw_df = raw_df.tail(fetch_limit)
             LOGGER.info("Loaded %s rows from local cache.", raw_df.height)
-            return _build_features(raw_df)
+            label_horizon = int(config.get("model", {}).get("label_horizon", 1))
+            return _build_features(raw_df, label_horizon=label_horizon)
         LOGGER.warning("Local cache path configured but not found: %s — falling back to exchange.", cache_path)
 
     exchange_name = asset_cfg["exchange"]
@@ -574,7 +583,8 @@ def _load_historical_btc_data(config: dict[str, Any]) -> pl.DataFrame:
         LOGGER.warning("Could not load ETH proxy data, continuing without it: %s", exc)
 
     LOGGER.info("Loaded %s BTC candles from %s", raw_df.height, exchange_name)
-    return _build_features(raw_df)
+    label_horizon = int(config.get("model", {}).get("label_horizon", 1))
+    return _build_features(raw_df, label_horizon=label_horizon)
 
 
 def _prediction_probability(row: dict[str, Any]) -> float:
@@ -676,14 +686,17 @@ def _run_optuna_tune(state: AgentState) -> tuple[dict[str, float], float]:
     slippage = float(simulation_cfg["slippage_bps"]) / 10000.0
 
     def objective(trial: optuna.Trial) -> float:
-        long_threshold = trial.suggest_float("long_threshold", 0.52, 0.72)
-        short_threshold = trial.suggest_float("short_threshold", 0.28, 0.48)
+        # Widened search space: lets Optuna discover whether very high/low thresholds
+        # genuinely help with real data rather than being pinned at the old ceiling.
+        long_threshold = trial.suggest_float("long_threshold", 0.50, 0.85)
+        short_threshold = trial.suggest_float("short_threshold", 0.15, 0.50)
         if short_threshold >= long_threshold:
             return -10.0
 
         position = 0
         previous_position = 0
         strategy_returns: list[float] = []
+        positions: list[int] = []
 
         for idx in range(len(closes) - 1):
             prob_up = float(probs[idx])
@@ -697,10 +710,19 @@ def _run_optuna_tune(state: AgentState) -> tuple[dict[str, float], float]:
             )
             transaction_cost = slippage * abs(position - previous_position)
             strategy_returns.append((position * market_return) - transaction_cost)
+            positions.append(position)
             previous_position = position
 
         if len(strategy_returns) < 5:
             return -10.0
+
+        # Penalise near-zero activity: thresholds that produce fewer than 1 trade per
+        # 50 bars are exploiting slippage avoidance rather than finding real signal.
+        n_trades = int(np.sum(np.abs(np.diff(positions, prepend=0)) > 0))
+        min_trades = max(5, len(closes) // 50)
+        if n_trades < min_trades:
+            return -10.0
+
         arr = np.array(strategy_returns, dtype=float)
         std = float(arr.std(ddof=1)) if len(arr) > 1 else 0.0
         if std <= 1e-12:
@@ -776,8 +798,9 @@ def _run_walk_forward_backtest(state: AgentState) -> dict[str, Any]:
     train_bars = int(walk_cfg.get("train_bars", 400))
     test_bars = int(walk_cfg.get("test_bars", 100))
     step_bars = int(walk_cfg.get("step_bars", 50))
-    # Must match data_node() embargo: lag stack extends to lag-60, so min safe gap is max_lag+1=61.
-    embargo_gap = 61
+    # embargo_gap must be >= max_lag + label_horizon + 1.
+    # Default 61 = lag-60 + horizon-1 + 1. Set to 66 in config when label_horizon=5.
+    embargo_gap = int(walk_cfg.get("embargo_gap", 61))
 
     x_all = data.select(feature_cols).to_numpy()
     y_all = data["target_up"].to_numpy().astype(int)
@@ -984,10 +1007,10 @@ def data_node(state: AgentState) -> AgentState:
             _train_lightgbm_baseline(historical_data, config)
         )
 
-        # Start simulation AFTER training data + 61-bar gap to avoid
-        # in-sample evaluation and temporal leakage from lagged features.
-        # Lag stack extends to lag-60, so the minimum safe embargo is max_lag+1=61.
-        embargo_gap = 61
+        # Start simulation AFTER training data + embargo_gap to avoid in-sample
+        # evaluation and temporal leakage from lagged features.
+        # Default 61 = max_lag(60) + label_horizon(1) + 1. Increase to 66 when label_horizon=5.
+        embargo_gap = int(config.get("walk_forward", {}).get("embargo_gap", 61))
         cursor = split_idx + embargo_gap
         if cursor >= historical_data.height - 2:
             cursor = split_idx  # fallback: at least skip training data
@@ -1146,6 +1169,13 @@ def evaluate_node(state: AgentState) -> AgentState:
     transaction_cost = slippage * abs(position - previous_position)
     strategy_return = (position * market_return) - transaction_cost
 
+    # Perpetual funding cost: charged every 480 1m bars (8h) while in a position.
+    # Typical Binance rate is ±0.01%/8h; long pays, short receives (abs for simplicity).
+    cycle_count_current = int(state.get("cycle_count", 0)) + 1
+    funding_rate = float(config["simulation"].get("funding_rate_per_8h", 0.0))
+    if funding_rate > 0.0 and cycle_count_current % 480 == 0 and position != 0:
+        strategy_return -= abs(position) * funding_rate
+
     returns = list(state.get("returns", []))
     returns.append(strategy_return)
 
@@ -1201,6 +1231,12 @@ def optimize_node(state: AgentState) -> AgentState:
     update_lora_adapter(state)
     replay_buffer = append_to_replay_buffer(state)
 
+    # Accumulate unique SHAP rules (growing knowledge base, capped at 100).
+    shap_rules = list(state.get("shap_rules", []))
+    if shap_rule and shap_rule not in shap_rules:
+        shap_rules.append(shap_rule)
+    shap_rules = shap_rules[-100:]
+
     optimization_events = list(state.get("optimization_events", []))
     optimization_events.append(
         {
@@ -1212,13 +1248,15 @@ def optimize_node(state: AgentState) -> AgentState:
         }
     )
     LOGGER.info(
-        "Optimization triggered on cycle=%s (sharpe=%.4f).",
+        "Optimization triggered on cycle=%s (sharpe=%.4f, rules_kb=%d).",
         cycle_count,
         float(performance["sharpe"]),
+        len(shap_rules),
     )
     return {
         "strategy_params": best_params,
         "optimization_events": optimization_events,
         "replay_buffer": replay_buffer,
         "shap_rule": shap_rule,
+        "shap_rules": shap_rules,
     }
