@@ -510,7 +510,7 @@ def _train_lightgbm_baseline(
     return model, feature_cols, feature_importances, split_idx
 
 
-def _load_historical_btc_data(config: dict[str, Any]) -> pl.DataFrame:
+def _load_historical_btc_data(config: dict[str, Any]) -> tuple[pl.DataFrame, dict[str, Any]]:
     asset_cfg = config["asset"]
     api_cfg = config.get("api_keys", {})
     fetch_limit = int(asset_cfg["fetch_limit"])
@@ -529,7 +529,14 @@ def _load_historical_btc_data(config: dict[str, Any]) -> pl.DataFrame:
                 raw_df = raw_df.tail(fetch_limit)
             LOGGER.info("Loaded %s rows from local cache.", raw_df.height)
             label_horizon = int(config.get("model", {}).get("label_horizon", 1))
-            return _build_features(raw_df, label_horizon=label_horizon)
+            data_metadata = {
+                "data_source": "local_cache",
+                "data_file_path": str(cache_path),
+                "data_row_count": int(raw_df.height),
+                "first_timestamp_ms": int(raw_df["timestamp"].min()),
+                "last_timestamp_ms": int(raw_df["timestamp"].max()),
+            }
+            return _build_features(raw_df, label_horizon=label_horizon), data_metadata
         LOGGER.warning("Local cache path configured but not found: %s — falling back to exchange.", cache_path)
 
     exchange_name = asset_cfg["exchange"]
@@ -584,7 +591,14 @@ def _load_historical_btc_data(config: dict[str, Any]) -> pl.DataFrame:
 
     LOGGER.info("Loaded %s BTC candles from %s", raw_df.height, exchange_name)
     label_horizon = int(config.get("model", {}).get("label_horizon", 1))
-    return _build_features(raw_df, label_horizon=label_horizon)
+    data_metadata = {
+        "data_source": "exchange_pull",
+        "data_file_path": f"{exchange_name}:{asset_cfg['symbol']}:{asset_cfg['timeframe']}",
+        "data_row_count": int(raw_df.height),
+        "first_timestamp_ms": int(raw_df["timestamp"].min()),
+        "last_timestamp_ms": int(raw_df["timestamp"].max()),
+    }
+    return _build_features(raw_df, label_horizon=label_horizon), data_metadata
 
 
 def _prediction_probability(row: dict[str, Any]) -> float:
@@ -918,6 +932,9 @@ def _run_walk_forward_backtest(state: AgentState) -> dict[str, Any]:
             "train_bars": train_bars,
             "test_bars": test_bars,
             "step_bars": step_bars,
+            "embargo_gap": embargo_gap,
+            "slippage_bps": float(sim_cfg.get("slippage_bps", 0.0)),
+            "funding_rate_per_8h": float(sim_cfg.get("funding_rate_per_8h", 0.0)),
         },
         "expanding": expanding,
         "rolling": rolling,
@@ -1002,7 +1019,7 @@ def data_node(state: AgentState) -> AgentState:
     config = state["config"]
     historical_data = state.get("historical_data")
     if historical_data is None:
-        historical_data = _load_historical_btc_data(config)
+        historical_data, data_metadata = _load_historical_btc_data(config)
         model, feature_columns, feature_importances, split_idx = (
             _train_lightgbm_baseline(historical_data, config)
         )
@@ -1028,6 +1045,7 @@ def data_node(state: AgentState) -> AgentState:
             "lightgbm_model": model,
             "feature_columns": feature_columns,
             "feature_importances": feature_importances,
+            "data_metadata": data_metadata,
             "cursor": cursor,
             "current_row": current_row,
             "features_df": features_df,

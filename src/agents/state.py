@@ -51,3 +51,5 @@ class AgentState(TypedDict, total=False):
     optimization_events: list[dict[str, Any]]
     shap_rule: str
     shap_rules: list[str]
+    data_metadata: dict[str, Any]
+    run_metadata: dict[str, Any]
