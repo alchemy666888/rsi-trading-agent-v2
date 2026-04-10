@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import sys
 from datetime import datetime, timezone
@@ -16,6 +17,8 @@ if str(SRC_ROOT) not in sys.path:
 from agents.graph import build_agent_graph
 from agents.state import AgentState
 
+SHAP_RULES_PATH = PROJECT_ROOT / "data" / "shap_rules.json"
+
 
 def load_config(path: Path) -> dict[str, Any]:
     with path.open("r", encoding="utf-8") as config_file:
@@ -29,6 +32,24 @@ def configure_logging(config: dict[str, Any]) -> None:
         level=level,
         format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
     )
+
+
+def load_shap_rules() -> list[str]:
+    """Load persisted SHAP rules from previous sessions, if available."""
+    if SHAP_RULES_PATH.exists():
+        try:
+            rules = json.loads(SHAP_RULES_PATH.read_text(encoding="utf-8"))
+            if isinstance(rules, list):
+                return rules
+        except (json.JSONDecodeError, OSError):
+            pass
+    return []
+
+
+def save_shap_rules(rules: list[str]) -> None:
+    """Persist SHAP rules to disk so the knowledge base survives across sessions."""
+    SHAP_RULES_PATH.parent.mkdir(parents=True, exist_ok=True)
+    SHAP_RULES_PATH.write_text(json.dumps(rules, indent=2), encoding="utf-8")
 
 
 def write_markdown_report(state: AgentState) -> Path:
@@ -45,6 +66,7 @@ def write_markdown_report(state: AgentState) -> Path:
         "shap_rule",
         "If RSI rises above 55, long probability tends to increase.",
     )
+    shap_rules = state.get("shap_rules", [])
     optimization_events = state.get("optimization_events", [])
     walk_forward_metrics = performance.get("walk_forward_metrics", {})
     feature_importances = state.get("feature_importances", [])
@@ -143,6 +165,17 @@ def write_markdown_report(state: AgentState) -> Path:
     else:
         lines.extend(["- Feature importances not available.", ""])
 
+    # SHAP Knowledge Base
+    lines.extend(["## SHAP Knowledge Base", ""])
+    if shap_rules:
+        lines.append(f"*{len(shap_rules)} unique rules accumulated across sessions.*")
+        lines.append("")
+        for i, rule in enumerate(shap_rules[-20:], start=1):  # show last 20
+            lines.append(f"{i}. {rule}")
+        lines.append("")
+    else:
+        lines.extend(["- No rules accumulated yet.", ""])
+
     lines.extend(
         [
         "## Optimization Events",
@@ -173,7 +206,7 @@ def write_markdown_report(state: AgentState) -> Path:
     return report_path
 
 
-def build_initial_state(config: dict[str, Any]) -> AgentState:
+def build_initial_state(config: dict[str, Any], prior_shap_rules: list[str]) -> AgentState:
     return {
         "config": config,
         "cycle_count": 0,
@@ -181,6 +214,7 @@ def build_initial_state(config: dict[str, Any]) -> AgentState:
         "done": False,
         "position": 0,
         "previous_position": 0,
+        "entry_price": None,
         "last_action": "HOLD",
         "lightgbm_model": None,
         "feature_columns": [],
@@ -190,6 +224,7 @@ def build_initial_state(config: dict[str, Any]) -> AgentState:
         "returns": [],
         "trades": [],
         "replay_buffer": [],
+        "risk_params": {},
         "strategy_params": {
             "long_threshold": float(config["simulation"]["long_threshold"]),
             "short_threshold": float(config["simulation"]["short_threshold"]),
@@ -203,6 +238,7 @@ def build_initial_state(config: dict[str, Any]) -> AgentState:
             "walk_forward_metrics": {},
         },
         "shap_rule": "",
+        "shap_rules": prior_shap_rules,
     }
 
 
@@ -212,9 +248,18 @@ def main() -> None:
     configure_logging(config)
     logger = logging.getLogger("run_mvp")
 
+    prior_shap_rules = load_shap_rules()
+    if prior_shap_rules:
+        logger.info("Loaded %d SHAP rules from previous sessions.", len(prior_shap_rules))
+
     graph = build_agent_graph()
-    initial_state = build_initial_state(config)
+    initial_state = build_initial_state(config, prior_shap_rules)
     final_state: AgentState = graph.invoke(initial_state, config={"recursion_limit": 15000})
+
+    # Persist accumulated SHAP rules for next session
+    final_rules = final_state.get("shap_rules", [])
+    save_shap_rules(final_rules)
+    logger.info("Saved %d SHAP rules to %s", len(final_rules), SHAP_RULES_PATH)
 
     report_path = write_markdown_report(final_state)
     logger.info("MVP run complete. Cycles=%s", final_state.get("cycle_count", 0))

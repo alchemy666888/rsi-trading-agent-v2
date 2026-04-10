@@ -46,6 +46,8 @@ class AgentState(TypedDict, total=False):
     replay_buffer: list[dict[str, Any]]
 
     performance: Performance
+    risk_params: dict[str, Any]
     strategy_params: dict[str, float]
     optimization_events: list[dict[str, Any]]
     shap_rule: str
+    shap_rules: list[str]
