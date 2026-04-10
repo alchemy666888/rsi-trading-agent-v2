@@ -18,6 +18,7 @@ from agents.nodes import (
     _run_walk_forward_backtest,
     _safe_float,
     _sigmoid,
+    data_node,
     decision_node,
     risk_node,
 )
@@ -337,6 +338,127 @@ class TestWalkForwardBacktest:
         assert len(result["expanding"]["folds"]) >= 1
         assert len(result["rolling"]["folds"]) >= 1
 
+    @pytest.fixture
+    def deterministic_state(self) -> dict:
+        n = 220
+        t = np.arange(n, dtype=float)
+        close = 50_000.0 + 10.0 * t + 200.0 * np.sin(t / 4.0)
+        feat = np.sin(t / 5.0)
+        target_up = (np.roll(close, -1) > close).astype(int)
+        target_up[-1] = target_up[-2]
+        df = pl.DataFrame({"close": close, "feat": feat, "target_up": target_up})
+        cfg = {
+            **_SHARED_CONFIG,
+            "walk_forward": {
+                "train_bars": 80,
+                "test_bars": 20,
+                "step_bars": 30,
+                "embargo_gap": 10,
+                "interval_cycles": 500,
+            },
+            "simulation": {
+                **_SHARED_CONFIG["simulation"],
+                "slippage_bps": 1,
+                "funding_rate_per_8h": 0.0,
+            },
+        }
+        return {
+            "historical_data": df,
+            "feature_columns": ["feat"],
+            "config": cfg,
+            "strategy_params": {"long_threshold": 0.55, "short_threshold": 0.45},
+        }
+
+    def test_fold_boundaries_and_count_are_exact(self, deterministic_state):
+        result = _run_walk_forward_backtest(deterministic_state)
+
+        expected_expanding = [
+            (0, 80, 90, 110),
+            (0, 110, 120, 140),
+            (0, 140, 150, 170),
+            (0, 170, 180, 200),
+        ]
+        expected_rolling = [
+            (0, 80, 90, 110),
+            (30, 110, 120, 140),
+            (60, 140, 150, 170),
+            (90, 170, 180, 200),
+        ]
+
+        expanding_bounds = [
+            (f["train_start"], f["train_end"], f["test_start"], f["test_end"])
+            for f in result["expanding"]["folds"]
+        ]
+        rolling_bounds = [
+            (f["train_start"], f["train_end"], f["test_start"], f["test_end"])
+            for f in result["rolling"]["folds"]
+        ]
+        assert expanding_bounds == expected_expanding
+        assert rolling_bounds == expected_rolling
+
+    def test_embargo_enforces_no_train_test_overlap(self, deterministic_state):
+        embargo_gap = deterministic_state["config"]["walk_forward"]["embargo_gap"]
+        result = _run_walk_forward_backtest(deterministic_state)
+
+        for fold in result["expanding"]["folds"] + result["rolling"]["folds"]:
+            assert fold["test_start"] >= fold["train_end"] + embargo_gap
+            assert fold["test_start"] > fold["train_end"]
+
+    def test_higher_slippage_and_funding_do_not_improve_returns(self, deterministic_state):
+        baseline = _run_walk_forward_backtest(deterministic_state)
+
+        stressed_state = {
+            **deterministic_state,
+            "config": {
+                **deterministic_state["config"],
+                "simulation": {
+                    **deterministic_state["config"]["simulation"],
+                    "slippage_bps": 50,
+                    "funding_rate_per_8h": 0.02,
+                },
+            },
+        }
+        stressed = _run_walk_forward_backtest(stressed_state)
+
+        assert stressed["overall"]["mean_total_return"] <= baseline["overall"]["mean_total_return"] + 1e-12
+
+
+class TestDataNode:
+    def test_cursor_starts_after_training_plus_embargo(self, monkeypatch):
+        import agents.nodes as nodes
+
+        historical_data = pl.DataFrame(
+            {
+                "timestamp": np.arange(0, 200),
+                "close": np.linspace(50_000.0, 50_500.0, 200),
+                "feat": np.sin(np.arange(200) / 10.0),
+                "target_up": np.where(np.arange(200) % 2 == 0, 1, 0),
+            }
+        )
+
+        split_idx = 120
+        embargo_gap = 9
+
+        def _fake_load_historical_data(_config):
+            return historical_data
+
+        def _fake_train_baseline(_historical_data, _config):
+            return object(), ["feat"], {"feat": 1.0}, split_idx
+
+        monkeypatch.setattr(nodes, "_load_historical_btc_data", _fake_load_historical_data)
+        monkeypatch.setattr(nodes, "_train_lightgbm_baseline", _fake_train_baseline)
+
+        state = {
+            "config": {
+                "walk_forward": {"embargo_gap": embargo_gap},
+                "runtime": {"max_cycles": 1000},
+            }
+        }
+        result = data_node(state)
+
+        expected_cursor = split_idx + embargo_gap
+        assert result["cursor"] == expected_cursor
+        assert result["cursor"] > split_idx
     def test_raises_when_embargo_gap_below_required_threshold(self):
         state = self._make_state()
         state["config"]["walk_forward"]["embargo_gap"] = 61  # required is 60 + 1 + 1 = 62
