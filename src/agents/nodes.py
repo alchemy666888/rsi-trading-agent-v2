@@ -66,6 +66,30 @@ def _metric_float(metric: Any) -> float:
     return float(np.nan_to_num(arr[0], nan=0.0, posinf=0.0, neginf=0.0))
 
 
+def _get_label_horizon(config: dict[str, Any]) -> int:
+    return int(config.get("model", {}).get("label_horizon", 1))
+
+
+def _get_max_feature_lag(config: dict[str, Any]) -> int:
+    return int(config.get("model", {}).get("max_feature_lag", 60))
+
+
+def _required_embargo_gap(config: dict[str, Any]) -> int:
+    max_feature_lag = _get_max_feature_lag(config)
+    label_horizon = _get_label_horizon(config)
+    return max_feature_lag + label_horizon + 1
+
+
+def _validate_embargo_gap(config: dict[str, Any], embargo_gap: int, context: str) -> None:
+    required_embargo = _required_embargo_gap(config)
+    if embargo_gap < required_embargo:
+        raise ValueError(
+            f"{context}: walk_forward.embargo_gap={embargo_gap} is too small. "
+            f"Required minimum is max_feature_lag + label_horizon + 1 = "
+            f"{_get_max_feature_lag(config)} + {_get_label_horizon(config)} + 1 = {required_embargo}."
+        )
+
+
 def _compute_indicator_bundle(
     prefix: str,
     open_: np.ndarray,
@@ -282,12 +306,16 @@ def _build_multi_timeframe_features(
     return resampled.select(["dt"] + [col for col in resampled.columns if col.startswith(prefix)])
 
 
-def _build_features(raw_df: pl.DataFrame, label_horizon: int = 1) -> pl.DataFrame:
+def _build_features(
+    raw_df: pl.DataFrame,
+    label_horizon: int = 1,
+    max_feature_lag: int = 60,
+) -> pl.DataFrame:
     """# Week 1 upgrade: 300+ engineered features for LightGBM baseline.
 
     label_horizon controls how many bars forward the binary target_up label looks.
     Increasing it (e.g. to 5) reduces noise in the label at the cost of requiring
-    a larger embargo gap (max_lag + label_horizon + 1).
+    a larger embargo gap (max_feature_lag + label_horizon + 1).
     """
     feature_df = raw_df.with_columns(
         [
@@ -321,7 +349,7 @@ def _build_features(raw_df: pl.DataFrame, label_horizon: int = 1) -> pl.DataFram
         tf_df = _build_multi_timeframe_features(mtf_source, every=every, prefix=prefix)
         feature_df = feature_df.join_asof(tf_df.sort("dt"), on="dt", strategy="backward")
 
-    # Lag stack (1..60 bars) on key signal drivers
+    # Lag stack (1..max_feature_lag bars) on key signal drivers
     lag_columns = [
         col
         for col in ["close", "volume", "ret_1", "rsi_14", "macd_hist_12_26_9"]
@@ -329,7 +357,7 @@ def _build_features(raw_df: pl.DataFrame, label_horizon: int = 1) -> pl.DataFram
     ]
     lag_exprs: list[pl.Expr] = []
     for base_col in lag_columns:
-        for lag in range(1, 61):
+        for lag in range(1, max_feature_lag + 1):
             lag_exprs.append(pl.col(base_col).shift(lag).alias(f"{base_col}_lag_{lag}"))
     feature_df = feature_df.with_columns(lag_exprs)
 
@@ -396,7 +424,7 @@ def _build_features(raw_df: pl.DataFrame, label_horizon: int = 1) -> pl.DataFram
     # Binary forward-return target for LightGBM.
     # label_horizon=1 (default) predicts whether the next bar closes higher.
     # label_horizon=5 gives a less noisy signal at 1m resolution (try if WF accuracy stays < 51%).
-    # Note: embargo_gap in walk_forward config must be >= max_lag + label_horizon + 1.
+    # Note: embargo_gap in walk_forward config must be >= max_feature_lag + label_horizon + 1.
     feature_df = feature_df.with_columns(
         (
             (pl.col("close").shift(-label_horizon) > pl.col("close"))
@@ -537,6 +565,13 @@ def _load_historical_btc_data(config: dict[str, Any]) -> tuple[pl.DataFrame, dic
                 "last_timestamp_ms": int(raw_df["timestamp"].max()),
             }
             return _build_features(raw_df, label_horizon=label_horizon), data_metadata
+            label_horizon = _get_label_horizon(config)
+            max_feature_lag = _get_max_feature_lag(config)
+            return _build_features(
+                raw_df,
+                label_horizon=label_horizon,
+                max_feature_lag=max_feature_lag,
+            )
         LOGGER.warning("Local cache path configured but not found: %s — falling back to exchange.", cache_path)
 
     exchange_name = asset_cfg["exchange"]
@@ -599,6 +634,13 @@ def _load_historical_btc_data(config: dict[str, Any]) -> tuple[pl.DataFrame, dic
         "last_timestamp_ms": int(raw_df["timestamp"].max()),
     }
     return _build_features(raw_df, label_horizon=label_horizon), data_metadata
+    label_horizon = _get_label_horizon(config)
+    max_feature_lag = _get_max_feature_lag(config)
+    return _build_features(
+        raw_df,
+        label_horizon=label_horizon,
+        max_feature_lag=max_feature_lag,
+    )
 
 
 def _prediction_probability(row: dict[str, Any]) -> float:
@@ -812,9 +854,9 @@ def _run_walk_forward_backtest(state: AgentState) -> dict[str, Any]:
     train_bars = int(walk_cfg.get("train_bars", 400))
     test_bars = int(walk_cfg.get("test_bars", 100))
     step_bars = int(walk_cfg.get("step_bars", 50))
-    # embargo_gap must be >= max_lag + label_horizon + 1.
-    # Default 61 = lag-60 + horizon-1 + 1. Set to 66 in config when label_horizon=5.
-    embargo_gap = int(walk_cfg.get("embargo_gap", 61))
+    required_embargo = _required_embargo_gap(cfg)
+    embargo_gap = int(walk_cfg.get("embargo_gap", required_embargo))
+    _validate_embargo_gap(cfg, embargo_gap, "_run_walk_forward_backtest")
 
     x_all = data.select(feature_cols).to_numpy()
     y_all = data["target_up"].to_numpy().astype(int)
@@ -1026,8 +1068,9 @@ def data_node(state: AgentState) -> AgentState:
 
         # Start simulation AFTER training data + embargo_gap to avoid in-sample
         # evaluation and temporal leakage from lagged features.
-        # Default 61 = max_lag(60) + label_horizon(1) + 1. Increase to 66 when label_horizon=5.
-        embargo_gap = int(config.get("walk_forward", {}).get("embargo_gap", 61))
+        required_embargo = _required_embargo_gap(config)
+        embargo_gap = int(config.get("walk_forward", {}).get("embargo_gap", required_embargo))
+        _validate_embargo_gap(config, embargo_gap, "data_node")
         cursor = split_idx + embargo_gap
         if cursor >= historical_data.height - 2:
             cursor = split_idx  # fallback: at least skip training data
