@@ -341,6 +341,7 @@ class TestWalkForwardBacktest:
 
     @pytest.fixture
     def deterministic_state(self) -> dict:
+        n = 283
         n = 360
         t = np.arange(n, dtype=float)
         close = 50_000.0 + 10.0 * t + 200.0 * np.sin(t / 4.0)
@@ -373,6 +374,10 @@ class TestWalkForwardBacktest:
     def test_fold_boundaries_and_count_are_exact(self, deterministic_state):
         result = _run_walk_forward_backtest(deterministic_state)
 
+        # With train_bars=80, test_bars=20, step_bars=30, embargo_gap=62:
+        # split_start begins at 80 and advances by 30 each fold.
+        # test_start = split_start + 62, test_end = test_start + 20.
+        # Loop while split_start + 62 + 20 < 283 - 1 = 282.
         expected_expanding = [
             (0, 80, 142, 162),
             (0, 110, 172, 192),
@@ -459,6 +464,7 @@ class TestDataNode:
             "config": {
                 "walk_forward": {"embargo_gap": embargo_gap},
                 "runtime": {"max_cycles": 1000},
+                "model": {"max_feature_lag": 5, "label_horizon": 1},
             }
         }
         result = data_node(state)
@@ -468,6 +474,13 @@ class TestDataNode:
         assert result["cursor"] > split_idx
 
     def test_raises_when_embargo_gap_below_required_threshold(self):
+        # _make_state lives on TestWalkForwardBacktest; build a minimal state here.
+        rng = np.random.default_rng(42)
+        n = 300
+        close = np.cumprod(1 + rng.normal(0, 0.001, n)) * 50_000
+        feat = rng.standard_normal(n)
+        target_up = (np.diff(close, prepend=close[0]) > 0).astype(int)
+        df = pl.DataFrame({"close": close, "feat": feat, "target_up": target_up})
         n = 250
         df = pl.DataFrame(
             {
