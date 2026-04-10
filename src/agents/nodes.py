@@ -565,13 +565,6 @@ def _load_historical_btc_data(config: dict[str, Any]) -> tuple[pl.DataFrame, dic
                 "last_timestamp_ms": int(raw_df["timestamp"].max()),
             }
             return _build_features(raw_df, label_horizon=label_horizon), data_metadata
-            label_horizon = _get_label_horizon(config)
-            max_feature_lag = _get_max_feature_lag(config)
-            return _build_features(
-                raw_df,
-                label_horizon=label_horizon,
-                max_feature_lag=max_feature_lag,
-            )
         LOGGER.warning("Local cache path configured but not found: %s — falling back to exchange.", cache_path)
 
     exchange_name = asset_cfg["exchange"]
@@ -634,13 +627,6 @@ def _load_historical_btc_data(config: dict[str, Any]) -> tuple[pl.DataFrame, dic
         "last_timestamp_ms": int(raw_df["timestamp"].max()),
     }
     return _build_features(raw_df, label_horizon=label_horizon), data_metadata
-    label_horizon = _get_label_horizon(config)
-    max_feature_lag = _get_max_feature_lag(config)
-    return _build_features(
-        raw_df,
-        label_horizon=label_horizon,
-        max_feature_lag=max_feature_lag,
-    )
 
 
 def _prediction_probability(row: dict[str, Any]) -> float:
