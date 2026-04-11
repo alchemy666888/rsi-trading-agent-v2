@@ -1,0 +1,2 @@
+event_index,split,objective_name,objective_value,long_threshold,short_threshold,affects_future_oos_only
+1,validation,validation_sharpe,-20.88915933051415,0.5214300126882973,0.47943505959772875,true

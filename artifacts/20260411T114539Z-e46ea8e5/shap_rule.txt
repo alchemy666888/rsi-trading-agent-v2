@@ -1,0 +1,1 @@
+If eth_ret_1 is elevated (current=0.0038), the model estimate for long probability typically decreases.
