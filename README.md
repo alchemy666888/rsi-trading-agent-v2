@@ -1,6 +1,6 @@
 # BTC Model-Based Research Prototype
 
-This repository is a research-oriented BTC/USDT 1-minute trading prototype built around a small LangGraph execution loop, a LightGBM directional model, heavy feature engineering, threshold calibration on a validation split, and held-out simulation with artifact persistence.
+This repository is a research-oriented BTC/USDT 15-minute trading prototype built around a small LangGraph execution loop, a LightGBM directional model, heavy feature engineering, threshold calibration on a validation split, and held-out simulation with artifact persistence.
 
 It is intentionally positioned as a reproducible research baseline, not as a production trading system.
 
@@ -137,7 +137,7 @@ Snapshot mode is the better default for repeatable benchmarks, debugging, and do
 
 ## Building a Local Dataset Snapshot
 
-The repository includes a helper script that fetches paginated BTC/USDT 1-minute bars from Binance:
+The repository includes a helper script that fetches paginated BTC/USDT 15-minute bars from Binance:
 
 ```bash
 uv run python scripts/fetch_real_data.py --months 6 --out data/btc_1m_real.csv
@@ -338,7 +338,7 @@ One of the most important things about this repository is not overclaiming from 
 
 A few practical cautions:
 
-- Short 1-minute windows can produce unstable Sharpe values.
+- Short 15-minute windows can produce unstable Sharpe values.
 - A wide feature bank can easily overfit recent exchange pulls.
 - Negative or extreme Sharpe in example artifacts should be treated as a research outcome, not as a bug by itself.
 - Good held-out performance without decent walk-forward behavior should be viewed skeptically.

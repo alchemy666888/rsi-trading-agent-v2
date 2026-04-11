@@ -1,0 +1,8 @@
+{
+  "oos_end": 999,
+  "oos_start": 800,
+  "train_end": 600,
+  "train_start": 0,
+  "validation_end": 800,
+  "validation_start": 600
+}

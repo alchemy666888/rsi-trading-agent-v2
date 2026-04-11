@@ -1,0 +1,9 @@
+{
+  "columns": 1247,
+  "dataset_hash": "ff9268b77e474601",
+  "rows": 1000,
+  "source_mode": "exchange",
+  "source_ref": "exchange:binance",
+  "timestamp_end": 1775905500000,
+  "timestamp_start": 1775845560000
+}
