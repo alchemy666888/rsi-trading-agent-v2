@@ -21,7 +21,7 @@ from agents.risk import evaluate_risk
 
 def build_test_config() -> dict:
     return {
-        "asset": {"symbol": "BTC/USDT", "timeframe": "1m", "exchange": "binance", "fetch_limit": 1200},
+        "asset": {"symbol": "BTC/USDT", "timeframe": "15m", "exchange": "binance", "fetch_limit": 1200},
         "dataset": {"source_mode": "snapshot"},
         "snapshot": {"path": "ignored.parquet", "auto_write": False},
         "runtime": {"max_cycles": 200, "warmup_bars": 120, "artifact_output_dir": "artifacts"},

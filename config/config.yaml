@@ -1,6 +1,6 @@
 asset:
   symbol: "BTC/USDT"
-  timeframe: "1m"
+  timeframe: "15m"
   exchange: "binance"
   fetch_limit: 2000
 
@@ -8,7 +8,7 @@ dataset:
   source_mode: "exchange"
 
 snapshot:
-  path: "snapshots/btcusdt_1m.parquet"
+  path: "snapshots/btcusdt_15m.parquet"
   auto_write: false
 
 runtime:
@@ -49,7 +49,8 @@ model:
 
 features:
   include_multi_timeframe: true
-  max_lag_bars: 60
+  max_lag_bars: 16
+  multi_timeframe_intervals: ["1h", "4h", "1d"]
 
 walk_forward:
   train_bars: 500

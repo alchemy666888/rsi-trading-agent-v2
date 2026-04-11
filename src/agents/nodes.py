@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from agents.evaluation import compute_run_metrics
+from agents.evaluation import TIMEFRAME_MINUTES, compute_run_metrics
 from agents.modeling import predict_probability
 from agents.risk import evaluate_risk
 from agents.state import AgentState
@@ -77,11 +77,14 @@ def evaluate_node(state: AgentState) -> AgentState:
     transaction_cost = slippage * abs(target_position - current_position)
     strategy_return = (target_position * market_return) - transaction_cost
 
-    # Perpetual funding cost: charged every 480 1m bars (8h) while in a position.
-    # Typical Binance rate is ±0.01%/8h; long pays, short receives (abs for simplicity).
+    # Perpetual funding cost: charged every 8 h while in a position.
+    # Interval in bars adapts to the base timeframe (480 at 1m, 32 at 15m, etc.).
     cycle_count_current = int(state.get("cycle_count", 0)) + 1
     funding_rate = float(config["simulation"].get("funding_rate_per_8h", 0.0))
-    if funding_rate > 0.0 and cycle_count_current % 480 == 0 and current_position != 0:
+    tf_str = config.get("asset", {}).get("timeframe", "15m")
+    tf_minutes = TIMEFRAME_MINUTES.get(tf_str, 15)
+    funding_interval_bars = max(1, int(8 * 60 / tf_minutes))
+    if funding_rate > 0.0 and cycle_count_current % funding_interval_bars == 0 and current_position != 0:
         strategy_return -= abs(current_position) * funding_rate
 
     returns = list(state.get("returns", []))
@@ -122,7 +125,7 @@ def evaluate_node(state: AgentState) -> AgentState:
 
     cycle_count = len(returns)
     performance = {
-        "run_metrics": compute_run_metrics(returns, equity_curve, initial_equity, trades),
+        "run_metrics": compute_run_metrics(returns, equity_curve, initial_equity, trades, timeframe=tf_str),
         "benchmark_metrics": state["performance"]["benchmark_metrics"],
     }
     next_cursor = cursor + 1
