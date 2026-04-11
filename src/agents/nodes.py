@@ -1,22 +1,13 @@
 from __future__ import annotations
 
-import logging
-import math
-import warnings
 from datetime import datetime, timezone
-from typing import Any
 
-import ccxt  # type: ignore[import-untyped]
-import lightgbm as lgb
-import numpy as np
-import optuna
-import polars as pl
-import shap
-import talib
-import vectorbt as vbt
-
+from agents.evaluation import compute_run_metrics
+from agents.modeling import predict_probability
+from agents.risk import evaluate_risk
 from agents.state import AgentState
 
+<<<<<<< HEAD
 LOGGER = logging.getLogger(__name__)
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 warnings.filterwarnings(
@@ -1094,48 +1085,42 @@ def data_node(state: AgentState) -> AgentState:
             "done": False,
         }
 
+=======
+
+def data_node(state: AgentState) -> AgentState:
+    historical_data = state["historical_data"]
+>>>>>>> 3c91bfa (fine-tune: 2026-04-11-1800.md)
     cursor = int(state["cursor"])
-    max_cycles = int(config["runtime"]["max_cycles"])
-    cycle_count = int(state.get("cycle_count", 0))
-    done = cycle_count >= max_cycles or cursor >= (historical_data.height - 2)
+    split_metadata = state["split_metadata"]
+    oos_end = int(split_metadata["oos_end"])
+    done = bool(state.get("paused", False)) or cursor >= oos_end
     if done:
         return {"done": True}
 
     current_row = historical_data.row(cursor, named=True)
-    features_df = historical_data.slice(cursor, 1)
-    return {
-        "current_row": current_row,
-        "features_df": features_df,
-        "done": False,
-    }
+    return {"current_row": current_row, "done": False}
 
 
 def predict_node(state: AgentState) -> AgentState:
     row = state["current_row"]
-    model = state.get("lightgbm_model")
-    feature_columns = state.get("feature_columns", [])
-
-    if model is not None and feature_columns:
-        x_live = np.array(
-            [[_safe_float(row.get(feature_name), 0.0) for feature_name in feature_columns]],
-            dtype=float,
-        )
-        prob_up = float(model.predict_proba(x_live)[0, 1])
-    else:
-        prob_up = _prediction_probability(row)
-
-    regime_value = _safe_float(row.get("volatility_regime"), 0.0)
-    regime = "high_volatility" if regime_value >= 0.5 else "normal"
+    prob_up = predict_probability(row, state.get("lightgbm_model"), state.get("feature_columns", []))
+    regime = "high_volatility" if float(row.get("volatility_regime", 0.0)) >= 0.5 else "normal"
+    next_timestamp = int(state["historical_data"]["timestamp"][int(state["cursor"]) + 1])
     return {
         "prediction": {
             "prob_up": prob_up,
             "regime": regime,
+            "signal_timestamp": int(row["timestamp"]),
+            "execution_timestamp": next_timestamp,
+            "source_model": "lightgbm_baseline" if state.get("lightgbm_model") is not None else "fallback",
         }
     }
 
 
-def decision_node(state: AgentState) -> AgentState:
+def risk_node(state: AgentState) -> AgentState:
+    strategy_params = state["strategy_params"]
     prediction = state["prediction"]
+<<<<<<< HEAD
     config = state["config"]
     risk_params = state.get("risk_params", {})
     params = state.get(
@@ -1204,30 +1189,52 @@ def decision_node(state: AgentState) -> AgentState:
             }
         )
         entry_price = float(current_row["close"]) if position != 0 else None
+=======
+    proposed_position = 0
+    if float(prediction["prob_up"]) > float(strategy_params["long_threshold"]):
+        proposed_position = 1
+    elif float(prediction["prob_up"]) < float(strategy_params["short_threshold"]):
+        proposed_position = -1
+>>>>>>> 3c91bfa (fine-tune: 2026-04-11-1800.md)
 
+    target_position, risk_status = evaluate_risk(state, proposed_position)
     return {
+<<<<<<< HEAD
         "last_action": action,
         "previous_position": previous_position,
         "position": position,
         "entry_price": entry_price,
         "trades": trades,
+=======
+        "target_position": target_position,
+        "risk_status": risk_status,
+        "paused": bool(risk_status["paused"]),
+>>>>>>> 3c91bfa (fine-tune: 2026-04-11-1800.md)
     }
+
+
+def decision_node(state: AgentState) -> AgentState:
+    current_position = int(state.get("position", 0))
+    target_position = int(state.get("target_position", current_position))
+    action = "HOLD"
+    if target_position != current_position:
+        action = "LONG" if target_position > 0 else "SHORT" if target_position < 0 else "FLAT"
+    return {"last_action": action}
 
 
 def evaluate_node(state: AgentState) -> AgentState:
     config = state["config"]
     data = state["historical_data"]
     cursor = int(state["cursor"])
-    previous_position = int(state["previous_position"])
-    position = int(state["position"])
+    current_position = int(state.get("position", 0))
+    target_position = int(state.get("target_position", current_position))
 
     close_now = float(data["close"][cursor])
     close_next = float(data["close"][cursor + 1])
     market_return = (close_next - close_now) / close_now
-
     slippage = float(config["simulation"]["slippage_bps"]) / 10000.0
-    transaction_cost = slippage * abs(position - previous_position)
-    strategy_return = (position * market_return) - transaction_cost
+    transaction_cost = slippage * abs(target_position - current_position)
+    strategy_return = (target_position * market_return) - transaction_cost
 
     # Perpetual funding cost: charged every 480 1m bars (8h) while in a position.
     # Typical Binance rate is ±0.01%/8h; long pays, short receives (abs for simplicity).
@@ -1244,32 +1251,57 @@ def evaluate_node(state: AgentState) -> AgentState:
     equity_curve = list(state.get("equity_curve", []))
     equity_curve.append(equity)
 
-    cycle_count = int(state.get("cycle_count", 0)) + 1
-    performance = _compute_performance(returns, equity_curve, initial_equity)
+    trades = list(state.get("trades", []))
+    trade_history_buffer = list(state.get("trade_history_buffer", []))
+    if target_position != current_position:
+        trade_event = {
+            "cycle": len(returns),
+            "signal_timestamp": int(state["prediction"]["signal_timestamp"]),
+            "execution_timestamp": int(state["prediction"]["execution_timestamp"]),
+            "action": state["last_action"],
+            "from_position": current_position,
+            "to_position": target_position,
+            "price": close_now,
+            "prob_up": float(state["prediction"]["prob_up"]),
+            "risk_reasons": state.get("risk_status", {}).get("reasons", []),
+        }
+        trades.append(trade_event)
+        trade_history_buffer.append(
+            {
+                **trade_event,
+                "return": strategy_return,
+                "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+            }
+        )
 
-    walk_forward_interval = int(config.get("walk_forward", {}).get("interval_cycles", 10))
-    previous_walk_forward = state.get("performance", {}).get("walk_forward_metrics")
-    if cycle_count == 1 or cycle_count % walk_forward_interval == 0:
-        performance["walk_forward_metrics"] = _run_walk_forward_backtest(state)
-    elif previous_walk_forward is not None:
-        performance["walk_forward_metrics"] = previous_walk_forward
+    position = target_position
+    entry_price = state.get("entry_price")
+    if target_position != current_position:
+        entry_price = None if target_position == 0 else close_now
 
-    done = (
-        cycle_count >= int(config["runtime"]["max_cycles"])
-        or (cursor + 1) >= (data.height - 1)
-    )
+    cycle_count = len(returns)
+    performance = {
+        "run_metrics": compute_run_metrics(returns, equity_curve, initial_equity, trades),
+        "benchmark_metrics": state["performance"]["benchmark_metrics"],
+    }
+    next_cursor = cursor + 1
+    done = bool(state.get("paused", False)) or next_cursor >= int(state["split_metadata"]["oos_end"])
     return {
-        "cycle_count": cycle_count,
-        "cursor": cursor + 1,
+        "cursor": next_cursor,
         "equity": equity,
         "returns": returns,
         "equity_curve": equity_curve,
+        "trades": trades,
+        "trade_history_buffer": trade_history_buffer[-int(config["simulation"].get("trade_history_limit", 10000)) :],
+        "position": position,
+        "entry_price": entry_price,
         "performance": performance,
         "done": done,
     }
 
 
 def optimize_node(state: AgentState) -> AgentState:
+<<<<<<< HEAD
     config = state["config"]
     cycle_count = int(state["cycle_count"])
     performance = state["performance"]
@@ -1337,3 +1369,6 @@ def optimize_node(state: AgentState) -> AgentState:
         "shap_rule": shap_rule,
         "shap_rules": shap_rules,
     }
+=======
+    return {}
+>>>>>>> 3c91bfa (fine-tune: 2026-04-11-1800.md)

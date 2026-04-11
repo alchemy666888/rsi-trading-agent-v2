@@ -1,5 +1,6 @@
-# Week 1 Trading Agent Report (LightGBM + Walk-Forward)
+# Archived Report
 
+<<<<<<< HEAD
 - Generated (UTC): 2026-04-08T05:05:27.077760+00:00
 - Asset: BTC/USDT
 - Timeframe: 1m
@@ -20,9 +21,19 @@
 | Max Drawdown | 0.77% |
 | Total Return | -0.69% |
 | Win Rate | 53.00% |
+=======
+This file is retained only as a historical artifact from the earlier Week 1 prototype iteration.
 
-## SHAP Rule
+It predates the current held-out split enforcement, purge-gap walk-forward benchmark, and artifact bundle format.
 
+For current outputs, run:
+>>>>>>> 3c91bfa (fine-tune: 2026-04-11-1800.md)
+
+```bash
+uv run python run_mvp.py
+```
+
+<<<<<<< HEAD
 - If stochrsi_d_14 is elevated (current=1.9501), the model estimate for long probability typically increases.
 
 ## Walk-Forward Backtest
@@ -161,3 +172,6 @@
 | 98 | 150.4380 | 0.7179 | 0.2912 |
 | 99 | 152.2174 | 0.7104 | 0.2821 |
 | 100 | 150.6137 | 0.7076 | 0.2835 |
+=======
+Then inspect the generated `artifacts/<run_id>/report.md`.
+>>>>>>> 3c91bfa (fine-tune: 2026-04-11-1800.md)

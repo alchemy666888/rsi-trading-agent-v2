@@ -8,6 +8,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import yaml
 
@@ -16,7 +17,9 @@ SRC_ROOT = PROJECT_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
+from agents.artifacts import persist_run_artifacts
 from agents.graph import build_agent_graph
+from agents.setup import prepare_experiment
 from agents.state import AgentState
 
 SHAP_RULES_PATH = PROJECT_ROOT / "data" / "shap_rules.json"
@@ -30,12 +33,10 @@ def load_config(path: Path) -> dict[str, Any]:
 def configure_logging(config: dict[str, Any]) -> None:
     level_name = str(config["logging"]["level"]).upper()
     level = getattr(logging, level_name, logging.INFO)
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
-    )
+    logging.basicConfig(level=level, format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
 
 
+<<<<<<< HEAD
 def load_shap_rules() -> list[str]:
     """Load persisted SHAP rules from previous sessions, if available."""
     if SHAP_RULES_PATH.exists():
@@ -349,6 +350,11 @@ def build_initial_state(config: dict[str, Any], prior_shap_rules: list[str]) -> 
         "shap_rule": "",
         "shap_rules": prior_shap_rules,
     }
+=======
+def build_run_id() -> str:
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    return f"{timestamp}-{uuid4().hex[:8]}"
+>>>>>>> 3c91bfa (fine-tune: 2026-04-11-1800.md)
 
 
 def _get_git_commit_hash() -> str:
@@ -384,6 +390,7 @@ def main() -> None:
     configure_logging(config)
     logger = logging.getLogger("run_mvp")
 
+<<<<<<< HEAD
     prior_shap_rules = load_shap_rules()
     if prior_shap_rules:
         logger.info("Loaded %d SHAP rules from previous sessions.", len(prior_shap_rules))
@@ -410,15 +417,20 @@ def main() -> None:
     save_shap_rules(final_rules)
     logger.info("Saved %d SHAP rules to %s", len(final_rules), SHAP_RULES_PATH)
     final_state["readiness"] = evaluate_readiness(final_state)
+=======
+    run_id = build_run_id()
+    artifact_root = Path(str(config["runtime"]["artifact_output_dir"]))
+    artifact_dir = str(artifact_root / run_id)
+    initial_state = prepare_experiment(config, run_id=run_id, artifact_dir=artifact_dir)
+>>>>>>> 3c91bfa (fine-tune: 2026-04-11-1800.md)
 
-    report_path = write_markdown_report(final_state)
-    logger.info("MVP run complete. Cycles=%s", final_state.get("cycle_count", 0))
-    logger.info(
-        "Final metrics: sharpe=%.4f, max_drawdown=%.4f",
-        float(final_state["performance"]["sharpe"]),
-        float(final_state["performance"]["max_drawdown"]),
-    )
-    logger.info("Markdown report written to %s", report_path)
+    graph = build_agent_graph()
+    final_state: AgentState = graph.invoke(initial_state, config={"recursion_limit": 2000})
+
+    persisted_path = persist_run_artifacts(PROJECT_ROOT, final_state)
+    logger.info("Research prototype run complete. Run ID=%s", run_id)
+    logger.info("Artifact bundle written to %s", persisted_path)
+    logger.info("Held-out Sharpe=%.4f", float(final_state["performance"]["run_metrics"]["sharpe"]))
 
 
 if __name__ == "__main__":

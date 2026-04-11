@@ -1,7 +1,7 @@
 [project]
 name = "rsi-trading-agent-v2"
 version = "0.1.0"
-description = "Weekend MVP recurring self-improving BTC trading agent"
+description = "Week 1 BTC model-based research prototype with held-out evaluation"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

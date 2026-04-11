@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from langgraph.graph import END, START, StateGraph
 
+<<<<<<< HEAD
 from agents.nodes import (
     data_node,
     decision_node,
@@ -10,10 +11,13 @@ from agents.nodes import (
     predict_node,
     risk_node,
 )
+=======
+from agents.nodes import data_node, decision_node, evaluate_node, optimize_node, predict_node, risk_node
+>>>>>>> 3c91bfa (fine-tune: 2026-04-11-1800.md)
 from agents.state import AgentState
 
 
-def _route_after_optimize(state: AgentState) -> str:
+def route_after_optimize(state: AgentState) -> str:
     return "end" if bool(state.get("done", False)) else "continue"
 
 
@@ -32,10 +36,5 @@ def build_agent_graph():
     workflow.add_edge("risk", "decision")
     workflow.add_edge("decision", "evaluate")
     workflow.add_edge("evaluate", "optimize")
-    workflow.add_conditional_edges(
-        "optimize",
-        _route_after_optimize,
-        {"continue": "data", "end": END},
-    )
+    workflow.add_conditional_edges("optimize", route_after_optimize, {"continue": "data", "end": END})
     return workflow.compile()
-
