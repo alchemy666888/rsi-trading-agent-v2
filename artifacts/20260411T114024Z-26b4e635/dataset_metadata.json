@@ -1,0 +1,13 @@
+{
+  "columns": 1027,
+  "dataset_hash": "ca20c35139ab4434",
+  "missing_values_by_column": {},
+  "missing_values_total": 0,
+  "rows": 1000,
+  "source_mode": "exchange",
+  "source_ref": "exchange:binance",
+  "timestamp_end": 1775907000000,
+  "timestamp_end_utc": "2026-04-11T11:30:00+00:00",
+  "timestamp_start": 1775007900000,
+  "timestamp_start_utc": "2026-04-01T01:45:00+00:00"
+}

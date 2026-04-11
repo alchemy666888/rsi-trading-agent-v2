@@ -335,11 +335,21 @@ def _write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
             handle.write("\n")
 
 
+def _to_csv_scalar(value: Any) -> Any:
+    if isinstance(value, (dict, list, tuple, set)):
+        return json.dumps(value, sort_keys=True)
+    return value
+
+
 def _write_csv_records(path: Path, records: list[dict[str, Any]]) -> None:
     if not records:
         path.write_text("", encoding="utf-8")
         return
-    pl.DataFrame(records).write_csv(path)
+    normalized_records = [
+        {key: _to_csv_scalar(value) for key, value in record.items()}
+        for record in records
+    ]
+    pl.DataFrame(normalized_records).write_csv(path)
 
 
 def persist_run_artifacts(project_root: Path, state: AgentState) -> Path:

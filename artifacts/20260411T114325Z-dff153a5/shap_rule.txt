@@ -1,0 +1,1 @@
+If aroon_osc_14 is elevated (current=85.7143), the model estimate for long probability typically decreases.

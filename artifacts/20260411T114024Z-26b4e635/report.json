@@ -1,0 +1,203 @@
+{
+  "benchmark_comparison": {
+    "held_out_vs_walk_forward": {
+      "delta_sharpe": -13.665088699493705,
+      "delta_total_return": -0.015290703529513006,
+      "held_out_sharpe": -33.672564900266046,
+      "held_out_total_return": -0.050985907429026533,
+      "walk_forward_mean_sharpe": -20.00747620077234,
+      "walk_forward_mean_total_return": -0.03569520389951353
+    },
+    "overfit_warnings": []
+  },
+  "calibration_summary": {
+    "best_validation_score": -16.72617054139232,
+    "objective": "validation_sharpe",
+    "optimization_events": [
+      {
+        "affects_future_oos_only": true,
+        "best_params": {
+          "long_threshold": 0.6541668567680966,
+          "short_threshold": 0.44177835750722394
+        },
+        "objective_name": "validation_sharpe",
+        "objective_value": -16.72617054139232,
+        "split": "validation"
+      }
+    ],
+    "optimization_trials": 1,
+    "strategy_params": {
+      "long_threshold": 0.6541668567680966,
+      "short_threshold": 0.44177835750722394
+    }
+  },
+  "data_quality": {
+    "dataset_metadata": {
+      "columns": 1027,
+      "dataset_hash": "ca20c35139ab4434",
+      "missing_values_by_column": {},
+      "missing_values_total": 0,
+      "rows": 1000,
+      "source_mode": "exchange",
+      "source_ref": "exchange:binance",
+      "timestamp_end": 1775907000000,
+      "timestamp_end_utc": "2026-04-11T11:30:00+00:00",
+      "timestamp_start": 1775007900000,
+      "timestamp_start_utc": "2026-04-01T01:45:00+00:00"
+    },
+    "notes": [
+      "Missing values filled during feature prep: 0.",
+      "Feature columns available for model: 1024.",
+      "Assumed next-bar execution with slippage_bps=5.00."
+    ],
+    "split_metadata": {
+      "oos_end": 999,
+      "oos_start": 800,
+      "train_end": 600,
+      "train_start": 0,
+      "validation_end": 800,
+      "validation_start": 600
+    }
+  },
+  "equity_diagnostics": {
+    "annualized_volatility": 1.0554612778023957,
+    "bars": 199,
+    "drawdown_episode_count": 3,
+    "drawdown_episodes": [
+      {
+        "duration_bars": 3,
+        "end_idx": 4,
+        "max_drawdown": 0.0005497637570869296,
+        "start_idx": 1,
+        "trough_idx": 3
+      },
+      {
+        "duration_bars": 2,
+        "end_idx": 7,
+        "max_drawdown": 0.0004999999999998339,
+        "start_idx": 5,
+        "trough_idx": 6
+      },
+      {
+        "duration_bars": 192,
+        "end_idx": null,
+        "max_drawdown": 0.05560468077443925,
+        "start_idx": 7,
+        "trough_idx": 197
+      }
+    ],
+    "max_drawdown_episode": {
+      "duration_bars": 192,
+      "end_idx": null,
+      "max_drawdown": 0.05560468077443925,
+      "start_idx": 7,
+      "trough_idx": 197
+    }
+  },
+  "event_counts": {
+    "artifact_persistence_started": 2,
+    "config_loaded": 1,
+    "dataset_loaded": 1,
+    "decision_made": 199,
+    "feature_engineering_completed": 1,
+    "model_training_completed": 1,
+    "model_training_started": 1,
+    "oos_simulation_completed": 1,
+    "oos_simulation_started": 1,
+    "optimization_event_recorded": 1,
+    "optimize_cycle": 199,
+    "prediction_generated": 199,
+    "risk_evaluated": 199,
+    "run_failed": 1,
+    "run_started": 1,
+    "step_evaluated": 199,
+    "threshold_calibration_completed": 1,
+    "threshold_calibration_started": 1,
+    "trade_closed": 51,
+    "trade_opened": 52,
+    "walk_forward_completed": 1,
+    "walk_forward_started": 1
+  },
+  "failure": {
+    "error_message": "CSV format does not support nested data",
+    "error_type": "ComputeError",
+    "failed_at_utc": "2026-04-11T11:40:33.077061+00:00",
+    "traceback": "Traceback (most recent call last):\n  File \"/Users/antee/Documents/projects/rsi-trading-agent-v2/run_mvp.py\", line 148, in main\n    persisted_path = persist_run_artifacts(PROJECT_ROOT, final_state)\n                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/Users/antee/Documents/projects/rsi-trading-agent-v2/src/agents/artifacts.py\", line 384, in persist_run_artifacts\n    _write_csv_records(artifact_dir / \"trades.csv\", list(state.get(\"trades\", [])))\n  File \"/Users/antee/Documents/projects/rsi-trading-agent-v2/src/agents/artifacts.py\", line 342, in _write_csv_records\n    pl.DataFrame(records).write_csv(path)\n  File \"/Users/antee/Documents/projects/rsi-trading-agent-v2/.venv/lib/python3.11/site-packages/polars/dataframe/frame.py\", line 3223, in write_csv\n    self.lazy().sink_csv(\n  File \"/Users/antee/Documents/projects/rsi-trading-agent-v2/.venv/lib/python3.11/site-packages/polars/lazyframe/frame.py\", line 3885, in sink_csv\n    ldf.collect(engine=engine)\n  File \"/Users/antee/Documents/projects/rsi-trading-agent-v2/.venv/lib/python3.11/site-packages/polars/_utils/deprecation.py\", line 97, in wrapper\n    return function(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/Users/antee/Documents/projects/rsi-trading-agent-v2/.venv/lib/python3.11/site-packages/polars/lazyframe/opt_flags.py\", line 326, in wrapper\n    return function(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/Users/antee/Documents/projects/rsi-trading-agent-v2/.venv/lib/python3.11/site-packages/polars/lazyframe/frame.py\", line 2464, in collect\n    return wrap_df(ldf.collect(engine, callback))\n                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\npolars.exceptions.ComputeError: CSV format does not support nested data\n"
+  },
+  "headline_kpis": {
+    "avg_trade_return": 8.467757469965856e-06,
+    "exposure_stats": {
+      "flat_exposure_pct": 0.32663316582914576,
+      "long_exposure_pct": 0.1507537688442211,
+      "short_exposure_pct": 0.5226130653266332,
+      "turnover": 0.5175879396984925
+    },
+    "max_drawdown": 0.05560468077443925,
+    "profit_factor": 1.010611284059765,
+    "sharpe": -33.672564900266046,
+    "total_return": -0.050985907429026533,
+    "trade_count": 51,
+    "turnover": 0.5175879396984925,
+    "win_rate": 0.5490196078431373
+  },
+  "metadata": {
+    "config_hash": "e5400dd2aec9a3b182aef6a016e8379a55b6fbe8158af5ef499591fa551f23cc",
+    "dataset_mode": "exchange",
+    "dataset_source": "exchange:binance",
+    "dataset_span_end": "2026-04-11T11:30:00+00:00",
+    "dataset_span_start": "2026-04-01T01:45:00+00:00",
+    "generated_at_utc": "2026-04-11T11:40:33.077878+00:00",
+    "git_commit_hash": "054eed91404a4cffff25a2a67611a3ac6de13a57",
+    "report_detail_level": "full",
+    "run_id": "20260411T114024Z-26b4e635",
+    "split_counts": {
+      "oos_bars": 199,
+      "total_bars": 1000,
+      "train_bars": 600,
+      "validation_bars": 200
+    },
+    "symbol": "BTC/USDT",
+    "timeframe": "15m"
+  },
+  "risk_diagnostics": {
+    "blocked_trades": 0,
+    "drawdown_pause_activated_count": 0,
+    "drawdown_pause_cleared_count": 0,
+    "max_consecutive_losses": 3,
+    "pause_durations_seconds": [],
+    "stop_loss_triggered_count": 0,
+    "take_profit_triggered_count": 0
+  },
+  "trade_diagnostics": {
+    "average_hold_bars": 2.549019607843137,
+    "best_trade": {
+      "close_cycle": 53,
+      "close_reason": [],
+      "close_timestamp": 1775775600000,
+      "direction": -1,
+      "entry_price": 72450.53,
+      "exit_price": 71946.01,
+      "hold_bars": 5,
+      "open_cycle": 48,
+      "open_timestamp": 1775771100000,
+      "pnl_pct": 0.007012480608723282
+    },
+    "long_vs_short_breakdown": {
+      "long_trades": 18,
+      "short_trades": 33
+    },
+    "longest_hold_bars": 20,
+    "worst_trade": {
+      "close_cycle": 120,
+      "close_reason": [],
+      "close_timestamp": 1775835900000,
+      "direction": -1,
+      "entry_price": 71800.01,
+      "exit_price": 72745.81,
+      "hold_bars": 20,
+      "open_cycle": 100,
+      "open_timestamp": 1775817900000,
+      "pnl_pct": -0.013001436096456986
+    }
+  }
+}

@@ -123,6 +123,39 @@ class ObservabilityTests(unittest.TestCase):
             self.assertIn("Failure / Fallbacks", report_text)
             self.assertIn("RuntimeError", report_text)
 
+    def test_csv_exports_serialize_nested_trade_fields(self) -> None:
+        state = {
+            "config": _config(),
+            "run_id": "nested-csv-run",
+            "artifact_dir": "artifacts/nested-csv-run",
+            "dataset_metadata": {},
+            "split_metadata": {},
+            "strategy_params": {},
+            "optimization_events": [],
+            "feature_importances": [],
+            "trade_history_buffer": [],
+            "completed_trades": [],
+            "equity_curve": [10000.0],
+            "returns": [0.0],
+            "performance": {"run_metrics": {}, "benchmark_metrics": {}},
+            "event_log": [],
+            "decision_log": [],
+            "shap_rule": "",
+            "trades": [
+                {
+                    "cycle": 1,
+                    "action": "LONG",
+                    "risk_reasons": ["blocked_high_volatility", "max_drawdown_pause"],
+                }
+            ],
+        }
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            artifact_path = persist_run_artifacts(Path(tmp_dir), state)
+            trades_csv = (artifact_path / "trades.csv").read_text(encoding="utf-8")
+            self.assertIn("risk_reasons", trades_csv)
+            self.assertIn("blocked_high_volatility", trades_csv)
+            self.assertIn("max_drawdown_pause", trades_csv)
+
 
 if __name__ == "__main__":
     unittest.main()
