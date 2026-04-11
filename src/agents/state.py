@@ -50,8 +50,14 @@ class AgentState(TypedDict, total=False):
     config: dict[str, Any]
     run_id: str
     artifact_dir: str
+    event_logger: Any
+    event_log: list[dict[str, Any]]
+
     dataset_metadata: dict[str, Any]
     split_metadata: SplitMetadata
+    run_metadata: dict[str, Any]
+    error_info: dict[str, Any]
+    last_state_snapshot: dict[str, Any]
 
     historical_data: pl.DataFrame
     cursor: int
@@ -65,7 +71,11 @@ class AgentState(TypedDict, total=False):
     last_action: Action
     position: int
     target_position: int
+    proposed_position: int
+    pre_risk_action: Action
     entry_price: float | None
+    entry_cycle: int | None
+    entry_timestamp: int | None
 
     lightgbm_model: Any
     feature_columns: list[str]
@@ -76,6 +86,8 @@ class AgentState(TypedDict, total=False):
     returns: list[float]
     trades: list[dict[str, Any]]
     trade_history_buffer: list[dict[str, Any]]
+    completed_trades: list[dict[str, Any]]
+    decision_log: list[dict[str, Any]]
 
     strategy_params: dict[str, float]
     optimization_events: list[dict[str, Any]]

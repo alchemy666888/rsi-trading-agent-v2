@@ -36,7 +36,19 @@ def build_test_config() -> dict:
             "block_high_volatility": True,
         },
         "walk_forward": {"train_bars": 240, "validation_bars": 60, "test_bars": 40, "step_bars": 20, "purge_bars": 5},
-        "logging": {"level": "INFO"},
+        "logging": {
+            "level": "INFO",
+            "enable_json_logs": True,
+            "enable_console_logs": False,
+            "decision_log_enabled": True,
+        },
+        "reporting": {
+            "report_detail_level": "full",
+            "write_report_json": True,
+            "persist_csv_exports": True,
+            "decision_log_enabled": True,
+            "decision_feature_count": 12,
+        },
     }
 
 
@@ -104,6 +116,27 @@ class PipelineTests(unittest.TestCase):
             "feature_importances": [{"feature": "rsi_14", "importance": 10.0}],
             "trades": [{"action": "LONG"}],
             "trade_history_buffer": [{"action": "LONG"}],
+            "completed_trades": [{"direction": 1, "pnl_pct": 0.01, "hold_bars": 2}],
+            "decision_log": [
+                {
+                    "cursor": 81,
+                    "bar_timestamp": 123,
+                    "close_price": 50000.0,
+                    "model_output": {"prob_up": 0.7, "regime": "normal", "source_model": "lightgbm_baseline"},
+                    "thresholds": {"long_threshold": 0.6, "short_threshold": 0.4},
+                    "risk_constraints_applied": {"reasons": []},
+                    "final_action": "LONG",
+                    "from_position": 0,
+                    "target_position": 1,
+                    "resulting_position": 1,
+                    "strategy_return": 0.005,
+                    "realized_pnl_pct": None,
+                    "unrealized_pnl_pct": 0.0,
+                    "reason_codes": [],
+                    "selected_features": {"rsi_14": 55.0},
+                }
+            ],
+            "event_log": [{"event_type": "run_started"}],
             "equity_curve": [10050.0],
             "returns": [0.005],
             "performance": {
@@ -117,13 +150,19 @@ class PipelineTests(unittest.TestCase):
             "shap_rule": "Test rule",
             "cursor": 90,
             "paused": False,
+            "run_metadata": {"git_commit_hash": "abc", "config_hash": "xyz", "split_counts": {"total_bars": 100, "train_bars": 60, "validation_bars": 20, "oos_bars": 19}},
         }
         with tempfile.TemporaryDirectory() as tmp_dir:
             artifact_path = persist_run_artifacts(Path(tmp_dir), state)
             self.assertTrue((artifact_path / "report.md").exists())
+            self.assertTrue((artifact_path / "report.json").exists())
             self.assertTrue((artifact_path / "benchmark_metrics.json").exists())
+            self.assertTrue((artifact_path / "decision_log.jsonl").exists())
+            self.assertTrue((artifact_path / "decision_summary.csv").exists())
+            self.assertTrue((artifact_path / "returns.csv").exists())
             report_text = (artifact_path / "report.md").read_text(encoding="utf-8")
-            self.assertIn("Held-Out Simulation", report_text)
+            self.assertIn("Run Metadata", report_text)
+            self.assertIn("Headline KPIs", report_text)
             benchmark_payload = json.loads((artifact_path / "benchmark_metrics.json").read_text(encoding="utf-8"))
             self.assertIn("expanding", benchmark_payload)
 

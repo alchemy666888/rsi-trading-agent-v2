@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -120,13 +121,31 @@ def load_historical_data(config: dict[str, Any]) -> tuple[pl.DataFrame, dict[str
 
 def build_dataset_metadata(feature_df: pl.DataFrame, source_mode: str, source_ref: str) -> dict[str, Any]:
     timestamps = feature_df["timestamp"].to_list()
+    missing_values_total = 0
+    missing_by_column: dict[str, int] = {}
+    for column in feature_df.columns:
+        null_count = int(feature_df[column].null_count())
+        if null_count > 0:
+            missing_by_column[column] = null_count
+            missing_values_total += null_count
+
+    timestamp_start = int(timestamps[0]) if timestamps else None
+    timestamp_end = int(timestamps[-1]) if timestamps else None
     payload = {
         "rows": feature_df.height,
         "columns": feature_df.width,
-        "timestamp_start": int(timestamps[0]) if timestamps else None,
-        "timestamp_end": int(timestamps[-1]) if timestamps else None,
+        "timestamp_start": timestamp_start,
+        "timestamp_end": timestamp_end,
+        "timestamp_start_utc": datetime.fromtimestamp(timestamp_start / 1000.0, tz=timezone.utc).isoformat()
+        if timestamp_start is not None
+        else None,
+        "timestamp_end_utc": datetime.fromtimestamp(timestamp_end / 1000.0, tz=timezone.utc).isoformat()
+        if timestamp_end is not None
+        else None,
         "source_mode": source_mode,
         "source_ref": source_ref,
+        "missing_values_total": missing_values_total,
+        "missing_values_by_column": missing_by_column,
     }
     payload["dataset_hash"] = hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()[:16]
     return payload

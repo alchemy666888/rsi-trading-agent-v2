@@ -5,161 +5,432 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import polars as pl
 import yaml
 
+from agents.decision_audit import decision_row_to_summary
+from agents.metrics_utils import (
+    compare_benchmark_metrics,
+    compute_equity_curve_diagnostics,
+    compute_exposure_stats,
+    compute_trade_summary_statistics,
+    count_events_by_type,
+)
 from agents.state import AgentState
 
 
-def write_report(state: AgentState) -> str:
-    config = state["config"]
-    run_metrics = state["performance"]["run_metrics"]
-    benchmark_metrics = state["performance"]["benchmark_metrics"]
-    split_metadata = state["split_metadata"]
-    risk_cfg = config.get("risk", {})
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _to_utc_iso(timestamp_ms: Any) -> str | None:
+    try:
+        return datetime.fromtimestamp(int(timestamp_ms) / 1000.0, tz=timezone.utc).isoformat()
+    except Exception:
+        return None
+
+
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        if value is None:
+            return default
+        return float(value)
+    except Exception:
+        return default
+
+
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        if value is None:
+            return default
+        return int(value)
+    except Exception:
+        return default
+
+
+def build_last_state_snapshot(state: dict[str, Any]) -> dict[str, Any]:
+    current_row = state.get("current_row", {})
+    if not isinstance(current_row, dict):
+        current_row = {}
+    return {
+        "cursor": state.get("cursor"),
+        "position": state.get("position"),
+        "target_position": state.get("target_position"),
+        "equity": state.get("equity"),
+        "last_action": state.get("last_action"),
+        "current_bar_timestamp": current_row.get("timestamp"),
+        "current_close": current_row.get("close"),
+        "prediction": state.get("prediction"),
+        "risk_status": state.get("risk_status"),
+        "returns_count": len(state.get("returns", [])),
+        "trade_count": len(state.get("trades", [])),
+    }
+
+
+def _compute_pause_durations_seconds(events: list[dict[str, Any]]) -> list[float]:
+    starts: list[datetime] = []
+    durations: list[float] = []
+    for event in events:
+        event_type = str(event.get("event_type", ""))
+        timestamp_raw = event.get("timestamp_utc")
+        if not isinstance(timestamp_raw, str):
+            continue
+        try:
+            timestamp = datetime.fromisoformat(timestamp_raw.replace("Z", "+00:00"))
+        except Exception:
+            continue
+        if event_type == "drawdown_pause_activated":
+            starts.append(timestamp)
+        elif event_type == "drawdown_pause_cleared" and starts:
+            start = starts.pop(0)
+            durations.append(max(0.0, (timestamp - start).total_seconds()))
+    return durations
+
+
+def _normalize_error_info(error_info: dict[str, Any] | None) -> dict[str, Any]:
+    info = dict(error_info or {})
+    return {
+        "error_type": str(info.get("error_type", "n/a")),
+        "error_message": str(info.get("error_message", "n/a")),
+        "traceback": str(info.get("traceback", "")),
+        "failed_at_utc": str(info.get("failed_at_utc", _utc_now())),
+    }
+
+
+def build_report_payload(state: AgentState) -> dict[str, Any]:
+    config = dict(state.get("config", {}))
+    reporting_cfg = dict(config.get("reporting", {}))
+    run_metadata = dict(state.get("run_metadata", {}))
+    dataset_metadata = dict(state.get("dataset_metadata", {}))
+    split_metadata = dict(state.get("split_metadata", {}))
+    run_metrics = dict(state.get("performance", {}).get("run_metrics", {}))
+    benchmark_metrics = dict(state.get("performance", {}).get("benchmark_metrics", {}))
+    optimization_events = list(state.get("optimization_events", []))
+    decision_log = list(state.get("decision_log", []))
+    completed_trades = list(state.get("completed_trades", []))
+    event_log = list(state.get("event_log", []))
+    returns = [float(value) for value in state.get("returns", [])]
+    equity_curve = [float(value) for value in state.get("equity_curve", [])]
+    initial_equity = _safe_float(config.get("simulation", {}).get("initial_equity"), default=1.0)
+    split_counts = dict(run_metadata.get("split_counts", {}))
+    if not split_counts:
+        split_counts = {
+            "total_bars": _safe_int(dataset_metadata.get("rows")),
+            "train_bars": max(0, _safe_int(split_metadata.get("train_end")) - _safe_int(split_metadata.get("train_start"))),
+            "validation_bars": max(
+                0,
+                _safe_int(split_metadata.get("validation_end")) - _safe_int(split_metadata.get("validation_start")),
+            ),
+            "oos_bars": max(0, _safe_int(split_metadata.get("oos_end")) - _safe_int(split_metadata.get("oos_start"))),
+        }
+    split_counts.setdefault("total_bars", _safe_int(dataset_metadata.get("rows")))
+
+    trade_summary = compute_trade_summary_statistics(completed_trades)
+    exposure_stats = compute_exposure_stats(decision_log)
+    equity_diagnostics = compute_equity_curve_diagnostics(returns, equity_curve, initial_equity)
+    event_counts = count_events_by_type(event_log)
+    benchmark_comparison = compare_benchmark_metrics(run_metrics, benchmark_metrics)
+    pause_durations = _compute_pause_durations_seconds(event_log)
+    error_info = _normalize_error_info(state.get("error_info")) if state.get("error_info") else None
+
+    risk_blocked_trades = 0
+    for row in decision_log:
+        constraints = row.get("risk_constraints_applied", {})
+        if isinstance(constraints, dict) and constraints.get("blocked_high_volatility", False):
+            risk_blocked_trades += 1
+
+    data_quality_notes = []
+    missing_values_total = dataset_metadata.get("missing_values_total")
+    if missing_values_total is not None:
+        data_quality_notes.append(f"Missing values filled during feature prep: {int(missing_values_total)}.")
+    else:
+        data_quality_notes.append("Missing value summary unavailable.")
+    data_quality_notes.append(
+        f"Feature columns available for model: {len(state.get('feature_columns', []))}."
+    )
+    data_quality_notes.append(
+        f"Assumed next-bar execution with slippage_bps={_safe_float(config.get('simulation', {}).get('slippage_bps')):.2f}."
+    )
+
+    return {
+        "metadata": {
+            "run_id": state.get("run_id", "unknown"),
+            "generated_at_utc": _utc_now(),
+            "report_detail_level": reporting_cfg.get("report_detail_level", "full"),
+            "git_commit_hash": run_metadata.get("git_commit_hash", "unknown"),
+            "config_hash": run_metadata.get("config_hash", "unknown"),
+            "symbol": config.get("asset", {}).get("symbol", "unknown"),
+            "timeframe": config.get("asset", {}).get("timeframe", "unknown"),
+            "dataset_source": dataset_metadata.get("source_ref"),
+            "dataset_mode": dataset_metadata.get("source_mode"),
+            "dataset_span_start": _to_utc_iso(dataset_metadata.get("timestamp_start")),
+            "dataset_span_end": _to_utc_iso(dataset_metadata.get("timestamp_end")),
+            "split_counts": split_counts,
+        },
+        "headline_kpis": {
+            "sharpe": _safe_float(run_metrics.get("sharpe")),
+            "max_drawdown": _safe_float(run_metrics.get("max_drawdown")),
+            "total_return": _safe_float(run_metrics.get("total_return")),
+            "win_rate": _safe_float(trade_summary.get("win_rate", run_metrics.get("win_rate"))),
+            "trade_count": _safe_int(trade_summary.get("trade_count", run_metrics.get("trade_count"))),
+            "avg_trade_return": _safe_float(trade_summary.get("avg_trade_return")),
+            "profit_factor": trade_summary.get("profit_factor", 0.0),
+            "turnover": _safe_float(exposure_stats.get("turnover")),
+            "exposure_stats": exposure_stats,
+        },
+        "calibration_summary": {
+            "strategy_params": state.get("strategy_params", {}),
+            "objective": optimization_events[-1].get("objective_name", "n/a") if optimization_events else "n/a",
+            "best_validation_score": optimization_events[-1].get("objective_value", 0.0) if optimization_events else 0.0,
+            "optimization_trials": len(optimization_events),
+            "optimization_events": optimization_events,
+        },
+        "benchmark_comparison": benchmark_comparison,
+        "risk_diagnostics": {
+            "blocked_trades": risk_blocked_trades,
+            "stop_loss_triggered_count": event_counts.get("stop_loss_triggered", 0),
+            "take_profit_triggered_count": event_counts.get("take_profit_triggered", 0),
+            "drawdown_pause_activated_count": event_counts.get("drawdown_pause_activated", 0),
+            "drawdown_pause_cleared_count": event_counts.get("drawdown_pause_cleared", 0),
+            "pause_durations_seconds": pause_durations,
+            "max_consecutive_losses": trade_summary.get("max_consecutive_losses", 0),
+        },
+        "trade_diagnostics": {
+            "best_trade": trade_summary.get("best_trade"),
+            "worst_trade": trade_summary.get("worst_trade"),
+            "longest_hold_bars": trade_summary.get("longest_hold_bars"),
+            "average_hold_bars": trade_summary.get("average_hold_bars"),
+            "long_vs_short_breakdown": {
+                "long_trades": trade_summary.get("long_count", 0),
+                "short_trades": trade_summary.get("short_count", 0),
+            },
+        },
+        "equity_diagnostics": equity_diagnostics,
+        "data_quality": {
+            "notes": data_quality_notes,
+            "dataset_metadata": dataset_metadata,
+            "split_metadata": split_metadata,
+        },
+        "failure": error_info,
+        "event_counts": event_counts,
+    }
+
+
+def render_markdown_report(report: dict[str, Any]) -> str:
+    metadata = report["metadata"]
+    kpis = report["headline_kpis"]
+    calibration = report["calibration_summary"]
+    benchmark = report["benchmark_comparison"]
+    risk = report["risk_diagnostics"]
+    trade = report["trade_diagnostics"]
+    data_quality = report["data_quality"]
+    failure = report.get("failure")
+    overfit_warnings = benchmark.get("overfit_warnings", [])
+    split_counts = metadata.get("split_counts", {})
 
     lines = [
         "# BTC Model-Based Research Prototype Report",
         "",
-        f"- Generated (UTC): {datetime.now(timezone.utc).isoformat()}",
-        f"- Asset: {config['asset']['symbol']}",
-        f"- Timeframe: {config['asset']['timeframe']}",
-        f"- Dataset mode: {config['dataset']['source_mode']}",
-        f"- Run ID: {state['run_id']}",
+        "## Run Metadata",
         "",
-        "## Held-Out Simulation",
+        f"- Run ID: {metadata.get('run_id')}",
+        f"- Generated (UTC): {metadata.get('generated_at_utc')}",
+        f"- Report Detail Level: {metadata.get('report_detail_level')}",
+        f"- Git Commit: {metadata.get('git_commit_hash')}",
+        f"- Config Hash: {metadata.get('config_hash')}",
+        f"- Asset: {metadata.get('symbol')} ({metadata.get('timeframe')})",
+        f"- Dataset Source: {metadata.get('dataset_source')} ({metadata.get('dataset_mode')})",
+        f"- Dataset Span (UTC): {metadata.get('dataset_span_start')} -> {metadata.get('dataset_span_end')}",
+        (
+            "- Bars: "
+            f"total={split_counts.get('total_bars', 'n/a')}, "
+            f"train={split_counts.get('train_bars', 'n/a')}, "
+            f"validation={split_counts.get('validation_bars', 'n/a')}, "
+            f"oos={split_counts.get('oos_bars', 'n/a')}"
+        ),
         "",
-        f"- OOS Bars: {split_metadata['oos_start']}..{split_metadata['oos_end']}",
-        f"- Completed Cycles: {state.get('cursor', split_metadata['oos_start']) - split_metadata['oos_start']}",
-        f"- Paused: {state.get('paused', False)}",
+        "## Headline KPIs",
         "",
         "| Metric | Value |",
         "|---|---:|",
-        f"| Sharpe Ratio | {float(run_metrics['sharpe']):.4f} |",
-        f"| Max Drawdown | {float(run_metrics['max_drawdown']) * 100.0:.2f}% |",
-        f"| Total Return | {float(run_metrics['total_return']) * 100.0:.2f}% |",
-        f"| Win Rate | {float(run_metrics['win_rate']) * 100.0:.2f}% |",
-        f"| Trade Count | {int(run_metrics['trade_count'])} |",
+        f"| Sharpe | {float(kpis.get('sharpe', 0.0)):.4f} |",
+        f"| Max Drawdown | {float(kpis.get('max_drawdown', 0.0)) * 100.0:.2f}% |",
+        f"| Total Return | {float(kpis.get('total_return', 0.0)) * 100.0:.2f}% |",
+        f"| Win Rate | {float(kpis.get('win_rate', 0.0)) * 100.0:.2f}% |",
+        f"| Trade Count | {int(kpis.get('trade_count', 0))} |",
+        f"| Avg Trade Return | {float(kpis.get('avg_trade_return', 0.0)) * 100.0:.4f}% |",
+        f"| Profit Factor | {kpis.get('profit_factor', 0.0)} |",
+        f"| Turnover | {float(kpis.get('turnover', 0.0)):.4f} |",
+        f"| Long Exposure | {float(kpis.get('exposure_stats', {}).get('long_exposure_pct', 0.0)) * 100.0:.2f}% |",
+        f"| Short Exposure | {float(kpis.get('exposure_stats', {}).get('short_exposure_pct', 0.0)) * 100.0:.2f}% |",
+        f"| Flat Exposure | {float(kpis.get('exposure_stats', {}).get('flat_exposure_pct', 0.0)) * 100.0:.2f}% |",
         "",
-        "## Walk-Forward Benchmark",
+        "## Calibration Summary",
         "",
-        f"- Train Bars: {benchmark_metrics.get('settings', {}).get('train_bars', 'n/a')}",
-        f"- Validation Bars: {benchmark_metrics.get('settings', {}).get('validation_bars', 'n/a')}",
-        f"- Test Bars: {benchmark_metrics.get('settings', {}).get('test_bars', 'n/a')}",
-        f"- Purge Bars: {benchmark_metrics.get('settings', {}).get('purge_bars', 'n/a')}",
-        f"- Signal Delay Bars: {benchmark_metrics.get('settings', {}).get('signal_delay_bars', 'n/a')}",
+        f"- Tuned Thresholds: {json.dumps(calibration.get('strategy_params', {}), sort_keys=True)}",
+        f"- Objective: {calibration.get('objective')}",
+        f"- Best Validation Score: {float(calibration.get('best_validation_score', 0.0)):.4f}",
+        f"- Optimization Events Recorded: {int(calibration.get('optimization_trials', 0))}",
         "",
-        "| Mode | Mean Sharpe | Mean Max Drawdown | Mean Total Return | Mean Win Rate | Folds |",
-        "|---|---:|---:|---:|---:|---:|",
+        "## Benchmark Comparison",
+        "",
+        f"- Delta Sharpe (Held-Out - Walk-Forward Mean): {float(benchmark.get('held_out_vs_walk_forward', {}).get('delta_sharpe', 0.0)):.4f}",
+        f"- Delta Total Return (Held-Out - Walk-Forward Mean): {float(benchmark.get('held_out_vs_walk_forward', {}).get('delta_total_return', 0.0)) * 100.0:.2f}%",
     ]
 
-    for mode in ["expanding", "rolling"]:
-        mode_metrics = benchmark_metrics.get(mode, {})
-        lines.append(
-            "| "
-            f"{mode.title()} | "
-            f"{float(mode_metrics.get('mean_sharpe', 0.0)):.4f} | "
-            f"{float(mode_metrics.get('mean_max_drawdown', 0.0)) * 100.0:.2f}% | "
-            f"{float(mode_metrics.get('mean_total_return', 0.0)) * 100.0:.2f}% | "
-            f"{float(mode_metrics.get('mean_win_rate', 0.0)) * 100.0:.2f}% | "
-            f"{len(mode_metrics.get('folds', []))} |"
-        )
+    if overfit_warnings:
+        lines.append("- Overfit Warnings:")
+        for warning in overfit_warnings:
+            lines.append(f"  - {warning}")
+    else:
+        lines.append("- Overfit Warnings: none triggered.")
 
     lines.extend(
         [
             "",
-            "## Calibration Rule",
+            "## Risk Diagnostics",
             "",
-            f"- {state.get('shap_rule', 'No SHAP rule available.')}",
+            f"- Blocked Trades: {int(risk.get('blocked_trades', 0))}",
+            f"- Stop Loss Trigger Count: {int(risk.get('stop_loss_triggered_count', 0))}",
+            f"- Take Profit Trigger Count: {int(risk.get('take_profit_triggered_count', 0))}",
+            f"- Drawdown Pause Activated Count: {int(risk.get('drawdown_pause_activated_count', 0))}",
+            f"- Drawdown Pause Cleared Count: {int(risk.get('drawdown_pause_cleared_count', 0))}",
+            f"- Pause Durations (seconds): {risk.get('pause_durations_seconds', [])}",
+            f"- Max Consecutive Losses: {int(risk.get('max_consecutive_losses', 0))}",
             "",
-            "## Active Risk Rules",
+            "## Trade Diagnostics",
             "",
-            f"- Max abs position: {risk_cfg.get('max_abs_position', 1)}",
-            f"- Max turnover per bar: {risk_cfg.get('max_turnover_per_bar', 1)}",
-            f"- Max drawdown pause: {float(risk_cfg.get('max_drawdown_pause', 1.0)) * 100.0:.2f}%",
-            f"- Block high volatility: {bool(risk_cfg.get('block_high_volatility', False))}",
-            f"- Stop loss pct: {float(risk_cfg.get('stop_loss_pct', 0.0)) * 100.0:.2f}%",
-            f"- Take profit pct: {float(risk_cfg.get('take_profit_pct', 0.0)) * 100.0:.2f}%",
+            f"- Best Trade: {trade.get('best_trade')}",
+            f"- Worst Trade: {trade.get('worst_trade')}",
+            f"- Longest Hold (bars): {trade.get('longest_hold_bars')}",
+            f"- Average Hold (bars): {float(trade.get('average_hold_bars', 0.0)):.2f}",
+            f"- Long/Short Breakdown: {trade.get('long_vs_short_breakdown')}",
             "",
-            "## Optimization Provenance",
+            "## Data Quality / Readiness",
             "",
         ]
     )
+    for note in data_quality.get("notes", []):
+        lines.append(f"- {note}")
 
-    optimization_events = state.get("optimization_events", [])
-    if optimization_events:
-        lines.extend(
-            [
-                "| Event | Split | Objective | Value | Long Threshold | Short Threshold | Future OOS Only |",
-                "|---:|---|---|---:|---:|---:|---|",
-            ]
-        )
-        for idx, event in enumerate(optimization_events, start=1):
-            lines.append(
-                "| "
-                f"{idx} | "
-                f"{event.get('split', 'n/a')} | "
-                f"{event.get('objective_name', 'n/a')} | "
-                f"{float(event.get('objective_value', 0.0)):.4f} | "
-                f"{float(event.get('best_params', {}).get('long_threshold', 0.0)):.4f} | "
-                f"{float(event.get('best_params', {}).get('short_threshold', 0.0)):.4f} | "
-                f"{event.get('affects_future_oos_only', False)} |"
-            )
+    lines.extend(["", "## Failure / Fallbacks", ""])
+    if failure:
+        lines.append(f"- Error Type: {failure.get('error_type')}")
+        lines.append(f"- Error Message: {failure.get('error_message')}")
+        lines.append(f"- Failed At (UTC): {failure.get('failed_at_utc')}")
     else:
-        lines.append("- No optimization events recorded.")
+        lines.append("- No failures captured.")
 
     return "\n".join(lines) + "\n"
 
 
+def _write_json(path: Path, payload: Any, *, sort_keys: bool = True) -> None:
+    path.write_text(json.dumps(payload, indent=2, sort_keys=sort_keys), encoding="utf-8")
+
+
+def _write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
+    with path.open("w", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(json.dumps(row, sort_keys=True))
+            handle.write("\n")
+
+
+def _write_csv_records(path: Path, records: list[dict[str, Any]]) -> None:
+    if not records:
+        path.write_text("", encoding="utf-8")
+        return
+    pl.DataFrame(records).write_csv(path)
+
+
 def persist_run_artifacts(project_root: Path, state: AgentState) -> Path:
-    artifact_dir = project_root / state["artifact_dir"]
+    artifact_dir = project_root / str(state.get("artifact_dir", "artifacts/unknown-run"))
     artifact_dir.mkdir(parents=True, exist_ok=True)
 
-    report_text = write_report(state)
+    report_payload = build_report_payload(state)
+    report_text = render_markdown_report(report_payload)
     (artifact_dir / "report.md").write_text(report_text, encoding="utf-8")
-    (artifact_dir / "config.yaml").write_text(yaml.safe_dump(state["config"], sort_keys=False), encoding="utf-8")
-    (artifact_dir / "dataset_metadata.json").write_text(
-        json.dumps(state["dataset_metadata"], indent=2, sort_keys=True),
-        encoding="utf-8",
-    )
-    (artifact_dir / "split_metadata.json").write_text(
-        json.dumps(state["split_metadata"], indent=2, sort_keys=True),
-        encoding="utf-8",
-    )
-    (artifact_dir / "strategy_params.json").write_text(
-        json.dumps(state["strategy_params"], indent=2, sort_keys=True),
-        encoding="utf-8",
-    )
-    (artifact_dir / "optimization_events.json").write_text(
-        json.dumps(state.get("optimization_events", []), indent=2, sort_keys=True),
-        encoding="utf-8",
-    )
-    (artifact_dir / "feature_importances.json").write_text(
-        json.dumps(state.get("feature_importances", []), indent=2),
-        encoding="utf-8",
-    )
-    (artifact_dir / "trades.json").write_text(
-        json.dumps(state.get("trades", []), indent=2),
-        encoding="utf-8",
-    )
-    (artifact_dir / "trade_history_buffer.json").write_text(
-        json.dumps(state.get("trade_history_buffer", []), indent=2),
-        encoding="utf-8",
-    )
-    (artifact_dir / "equity_curve.json").write_text(
-        json.dumps(state.get("equity_curve", []), indent=2),
-        encoding="utf-8",
-    )
-    (artifact_dir / "returns.json").write_text(
-        json.dumps(state.get("returns", []), indent=2),
-        encoding="utf-8",
-    )
-    (artifact_dir / "benchmark_metrics.json").write_text(
-        json.dumps(state["performance"]["benchmark_metrics"], indent=2),
-        encoding="utf-8",
-    )
-    (artifact_dir / "run_metrics.json").write_text(
-        json.dumps(state["performance"]["run_metrics"], indent=2),
-        encoding="utf-8",
-    )
-    (artifact_dir / "shap_rule.txt").write_text(state.get("shap_rule", ""), encoding="utf-8")
+
+    reporting_cfg = dict(state.get("config", {}).get("reporting", {}))
+    write_report_json = bool(reporting_cfg.get("write_report_json", True))
+    persist_csv_exports = bool(reporting_cfg.get("persist_csv_exports", True))
+
+    if write_report_json:
+        _write_json(artifact_dir / "report.json", report_payload)
+
+    if "config" in state:
+        (artifact_dir / "config.yaml").write_text(yaml.safe_dump(state["config"], sort_keys=False), encoding="utf-8")
+
+    _write_json(artifact_dir / "dataset_metadata.json", dict(state.get("dataset_metadata", {})))
+    _write_json(artifact_dir / "split_metadata.json", dict(state.get("split_metadata", {})))
+    _write_json(artifact_dir / "strategy_params.json", dict(state.get("strategy_params", {})))
+    _write_json(artifact_dir / "optimization_events.json", list(state.get("optimization_events", [])))
+    _write_json(artifact_dir / "feature_importances.json", list(state.get("feature_importances", [])), sort_keys=False)
+    _write_json(artifact_dir / "trades.json", list(state.get("trades", [])), sort_keys=False)
+    _write_json(artifact_dir / "trade_history_buffer.json", list(state.get("trade_history_buffer", [])), sort_keys=False)
+    _write_json(artifact_dir / "completed_trades.json", list(state.get("completed_trades", [])), sort_keys=False)
+    _write_json(artifact_dir / "equity_curve.json", list(state.get("equity_curve", [])), sort_keys=False)
+    _write_json(artifact_dir / "returns.json", list(state.get("returns", [])), sort_keys=False)
+    _write_json(artifact_dir / "benchmark_metrics.json", dict(state.get("performance", {}).get("benchmark_metrics", {})), sort_keys=False)
+    _write_json(artifact_dir / "run_metrics.json", dict(state.get("performance", {}).get("run_metrics", {})), sort_keys=False)
+    _write_json(artifact_dir / "event_counts.json", report_payload.get("event_counts", {}))
+    _write_json(artifact_dir / "event_log.json", list(state.get("event_log", [])), sort_keys=False)
+    (artifact_dir / "shap_rule.txt").write_text(str(state.get("shap_rule", "")), encoding="utf-8")
+
+    decision_log = list(state.get("decision_log", []))
+    _write_jsonl(artifact_dir / "decision_log.jsonl", decision_log)
+    _write_json(artifact_dir / "decision_log.json", decision_log, sort_keys=False)
+
+    if persist_csv_exports:
+        _write_csv_records(artifact_dir / "trades.csv", list(state.get("trades", [])))
+        _write_csv_records(
+            artifact_dir / "equity_curve.csv",
+            [
+                {"cycle": idx + 1, "equity": float(value)}
+                for idx, value in enumerate(state.get("equity_curve", []))
+            ],
+        )
+        cumulative = 1.0
+        return_rows: list[dict[str, Any]] = []
+        for idx, value in enumerate(state.get("returns", []), start=1):
+            ret = float(value)
+            cumulative *= 1.0 + ret
+            return_rows.append(
+                {
+                    "cycle": idx,
+                    "strategy_return": ret,
+                    "cumulative_return": cumulative - 1.0,
+                }
+            )
+        _write_csv_records(artifact_dir / "returns.csv", return_rows)
+
+        optimization_rows: list[dict[str, Any]] = []
+        for idx, event in enumerate(state.get("optimization_events", []), start=1):
+            best_params = event.get("best_params", {}) if isinstance(event, dict) else {}
+            optimization_rows.append(
+                {
+                    "event_index": idx,
+                    "split": event.get("split"),
+                    "objective_name": event.get("objective_name"),
+                    "objective_value": event.get("objective_value"),
+                    "long_threshold": best_params.get("long_threshold"),
+                    "short_threshold": best_params.get("short_threshold"),
+                    "affects_future_oos_only": event.get("affects_future_oos_only"),
+                }
+            )
+        _write_csv_records(artifact_dir / "optimization_events.csv", optimization_rows)
+        _write_csv_records(
+            artifact_dir / "decision_summary.csv",
+            [decision_row_to_summary(row) for row in decision_log],
+        )
+
+    if state.get("error_info"):
+        error_info = _normalize_error_info(state.get("error_info"))
+        _write_json(artifact_dir / "error_summary.json", error_info)
+        (artifact_dir / "traceback.txt").write_text(error_info.get("traceback", ""), encoding="utf-8")
+        _write_json(
+            artifact_dir / "last_state_snapshot.json",
+            dict(state.get("last_state_snapshot", build_last_state_snapshot(state))),
+            sort_keys=False,
+        )
+
     return artifact_dir
