@@ -1,0 +1,1 @@
+If close_lag_11 is elevated (current=72815.6300), the model estimate for long probability typically decreases.
