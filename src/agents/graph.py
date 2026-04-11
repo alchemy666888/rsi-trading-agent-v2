@@ -2,18 +2,7 @@ from __future__ import annotations
 
 from langgraph.graph import END, START, StateGraph
 
-<<<<<<< HEAD
-from agents.nodes import (
-    data_node,
-    decision_node,
-    evaluate_node,
-    optimize_node,
-    predict_node,
-    risk_node,
-)
-=======
 from agents.nodes import data_node, decision_node, evaluate_node, optimize_node, predict_node, risk_node
->>>>>>> 3c91bfa (fine-tune: 2026-04-11-1800.md)
 from agents.state import AgentState
 
 

@@ -77,11 +77,6 @@ class AgentState(TypedDict, total=False):
     trades: list[dict[str, Any]]
     trade_history_buffer: list[dict[str, Any]]
 
-<<<<<<< HEAD
-    performance: Performance
-    risk_params: dict[str, Any]
-=======
->>>>>>> 3c91bfa (fine-tune: 2026-04-11-1800.md)
     strategy_params: dict[str, float]
     optimization_events: list[dict[str, Any]]
     performance: Performance
