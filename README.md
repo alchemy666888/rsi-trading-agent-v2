@@ -1,6 +1,6 @@
 # BTC Model-Based Research Prototype
 
-This repository is a research-oriented BTC/USDT 15-minute trading prototype built around a small LangGraph execution loop, a LightGBM directional model, heavy feature engineering, threshold calibration on a validation split, and held-out simulation with artifact persistence.
+This repository is a research-oriented BTC/USDT 15-minute trading prototype built around a small LangGraph execution loop, a LightGBM directional model, heavy feature engineering, threshold calibration on a validation split, and held-out simulation with artifact persistence.  The base timeframe is configurable (default `15m`).
 
 It is intentionally positioned as a reproducible research baseline, not as a production trading system.
 
@@ -30,7 +30,7 @@ What this repository does not do today:
 
 The project is useful as a compact experimentation harness for questions like:
 
-- Does a large TA-style feature bank contain any short-horizon directional signal on recent BTC 1m data?
+- Does a large TA-style feature bank contain any short-horizon directional signal on recent BTC 15m data?
 - How sensitive is simple threshold-based execution to validation tuning?
 - Do held-out results resemble walk-forward benchmark behavior, or are they likely overfit?
 - What artifacts should be preserved before claiming any strategy improvement?
@@ -110,7 +110,7 @@ uv run python run_mvp.py
 
 In this mode the system:
 
-- fetches recent BTC/USDT 1m candles from Binance via `ccxt`
+- fetches recent BTC/USDT 15m candles from Binance via `ccxt`
 - optionally enriches the dataset with ETH proxy columns when available
 - builds features, trains the baseline, calibrates thresholds, and runs the held-out simulation
 
@@ -123,7 +123,7 @@ dataset:
   source_mode: "snapshot"
 
 snapshot:
-  path: "data/btc_1m_real.csv"
+  path: "data/btc_15m_real.csv"
   auto_write: false
 ```
 
@@ -137,10 +137,10 @@ Snapshot mode is the better default for repeatable benchmarks, debugging, and do
 
 ## Building a Local Dataset Snapshot
 
-The repository includes a helper script that fetches paginated BTC/USDT 15-minute bars from Binance:
+The repository includes a helper script that fetches paginated BTC/USDT candles from Binance (default 15m):
 
 ```bash
-uv run python scripts/fetch_real_data.py --months 6 --out data/btc_1m_real.csv
+uv run python scripts/fetch_real_data.py --months 6 --out data/btc_15m_real.csv
 ```
 
 Example options:
@@ -160,7 +160,7 @@ The main configuration file is [`config/config.yaml`](/Users/antee/Documents/pro
 Controls market source settings:
 
 - `symbol`: exchange symbol, default `BTC/USDT`
-- `timeframe`: candle interval, currently `1m`
+- `timeframe`: candle interval, default `15m` (configurable)
 - `exchange`: `ccxt` exchange id, currently `binance`
 - `fetch_limit`: number of rows fetched in exchange mode
 
@@ -236,6 +236,7 @@ Controls feature-engineering breadth:
 
 - `include_multi_timeframe`
 - `max_lag_bars`
+- `multi_timeframe_intervals`: list of resampling intervals for higher-timeframe features (default `["1h", "4h", "1d"]` at 15m base)
 
 This section can materially change both runtime cost and model behavior because the feature matrix is very wide.
 
@@ -259,7 +260,7 @@ Feature generation is intentionally broad and includes:
 - many TA-Lib indicators such as SMA, EMA, RSI, ROC, ATR, NATR, CCI, MFI, ADX, MACD, Bollinger Bands, stochastic variants, Aroon, OBV, ADOSC, Hilbert transforms, and several candlestick patterns
 - lagged versions of selected columns
 - rolling means, standard deviations, extrema, z-scores, and realized volatility windows
-- optional multi-timeframe joins from 5m, 15m, and 1h aggregates
+- optional multi-timeframe joins (default 1h, 4h, and 1d at 15m base; configurable)
 - optional BTC/ETH relative features when ETH proxy data is successfully fetched
 - a binary target: whether the next close is above the current close
 
@@ -338,7 +339,7 @@ One of the most important things about this repository is not overclaiming from 
 
 A few practical cautions:
 
-- Short 15-minute windows can produce unstable Sharpe values.
+- Short data windows can produce unstable Sharpe values.
 - A wide feature bank can easily overfit recent exchange pulls.
 - Negative or extreme Sharpe in example artifacts should be treated as a research outcome, not as a bug by itself.
 - Good held-out performance without decent walk-forward behavior should be viewed skeptically.
@@ -400,7 +401,7 @@ uv run python run_mvp.py
 Fetch a larger local dataset:
 
 ```bash
-uv run python scripts/fetch_real_data.py --months 6 --out data/btc_1m_real.csv
+uv run python scripts/fetch_real_data.py --months 6 --out data/btc_15m_real.csv
 ```
 
 Run tests:

@@ -1,11 +1,11 @@
-"""Fetch real BTC/USDT 1m OHLCV data from Binance via CCXT with pagination.
+"""Fetch real BTC/USDT OHLCV data from Binance via CCXT with pagination.
 
 Usage:
-    uv run python scripts/fetch_real_data.py [--months 6] [--symbol BTC/USDT] [--out data/btc_1m_real.csv]
+    uv run python scripts/fetch_real_data.py [--months 6] [--symbol BTC/USDT] [--timeframe 15m] [--out data/btc_15m_real.csv]
 
 The script pages backwards through Binance history using the `since` parameter,
-collecting up to `months` of 1-minute candles, then saves to a CSV file.
-Only needs to run once (or weekly to refresh).
+collecting up to `months` of candles at the requested timeframe, then saves to a
+CSV file.  Only needs to run once (or weekly to refresh).
 """
 from __future__ import annotations
 
@@ -22,27 +22,37 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 LOGGER = logging.getLogger(__name__)
 
 BARS_PER_PAGE = 1_000          # Binance hard cap per fetch_ohlcv call
-MS_PER_BAR = 60_000            # 1-minute bars → 60,000 ms each
+
+# Maps timeframe strings to bar duration in milliseconds.
+_TIMEFRAME_MS: dict[str, int] = {
+    "1m": 60_000, "3m": 180_000, "5m": 300_000, "15m": 900_000,
+    "30m": 1_800_000, "1h": 3_600_000, "4h": 14_400_000, "1d": 86_400_000,
+}
 
 
 def fetch_ohlcv_paginated(
     symbol: str,
     months: int,
     out_path: Path,
+    timeframe: str = "15m",
 ) -> int:
-    """Download `months` of 1m OHLCV from Binance and write to `out_path`.
+    """Download `months` of OHLCV from Binance and write to `out_path`.
 
     Returns the number of rows written.
     """
     exchange = ccxt.binance({"enableRateLimit": True})
 
+    ms_per_bar = _TIMEFRAME_MS.get(timeframe, 900_000)
     now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
-    target_bars = months * 30 * 24 * 60          # approximate; enough for training
-    since_ms = now_ms - target_bars * MS_PER_BAR
+    # Approximate bar count for the requested duration
+    bars_per_day = int(86_400_000 / ms_per_bar)
+    target_bars = months * 30 * bars_per_day
+    since_ms = now_ms - target_bars * ms_per_bar
 
     LOGGER.info(
-        "Fetching %s 1m bars for %s from %s",
+        "Fetching %s %s bars for %s from %s",
         target_bars,
+        timeframe,
         symbol,
         datetime.fromtimestamp(since_ms / 1000, tz=timezone.utc).isoformat(),
     )
@@ -51,9 +61,9 @@ def fetch_ohlcv_paginated(
     seen_timestamps: set[int] = set()
     cursor = since_ms
 
-    while cursor < now_ms - MS_PER_BAR:
+    while cursor < now_ms - ms_per_bar:
         try:
-            batch = exchange.fetch_ohlcv(symbol, "1m", since=cursor, limit=BARS_PER_PAGE)
+            batch = exchange.fetch_ohlcv(symbol, timeframe, since=cursor, limit=BARS_PER_PAGE)
         except ccxt.NetworkError as exc:
             LOGGER.warning("Network error, retrying in 5s: %s", exc)
             time.sleep(5)
@@ -86,7 +96,7 @@ def fetch_ohlcv_paginated(
             break  # no forward progress; avoid infinite loop
 
         # Advance cursor to one bar past the latest received timestamp
-        cursor = latest_ts + MS_PER_BAR
+        cursor = latest_ts + ms_per_bar
 
     if not all_rows:
         LOGGER.error("No data fetched — check exchange connectivity and API limits.")
@@ -105,13 +115,14 @@ def fetch_ohlcv_paginated(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Fetch real BTC 1m OHLCV data from Binance.")
+    parser = argparse.ArgumentParser(description="Fetch real BTC OHLCV data from Binance.")
     parser.add_argument("--months", type=int, default=6, help="Months of history to fetch (default: 6)")
     parser.add_argument("--symbol", default="BTC/USDT", help="Trading pair (default: BTC/USDT)")
+    parser.add_argument("--timeframe", default="15m", help="Candle interval (default: 15m)")
     parser.add_argument(
         "--out",
-        default="data/btc_1m_real.csv",
-        help="Output CSV path (default: data/btc_1m_real.csv)",
+        default="data/btc_15m_real.csv",
+        help="Output CSV path (default: data/btc_15m_real.csv)",
     )
     args = parser.parse_args()
 
@@ -119,6 +130,7 @@ def main() -> None:
         symbol=args.symbol,
         months=args.months,
         out_path=Path(args.out),
+        timeframe=args.timeframe,
     )
     if n < 1000:
         raise SystemExit(f"Too few bars fetched ({n}). Check connectivity and try again.")

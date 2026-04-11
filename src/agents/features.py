@@ -240,7 +240,23 @@ def build_features(raw_df: pl.DataFrame, feature_cfg: dict[str, Any] | None = No
 
     if bool(feature_cfg.get("include_multi_timeframe", True)):
         mtf_source = feature_df.select(["dt", "open", "high", "low", "close", "volume"])
-        for every, prefix in [("5m", "tf_5m_"), ("15m", "tf_15m_"), ("1h", "tf_1h_")]:
+        # Default MTF intervals depend on base timeframe.  At 15m base the
+        # original 5m/15m levels are impossible or redundant, so we step up
+        # to 1h/4h/1d.  Backward-compatible: at 1m the original levels apply.
+        _default_mtf: dict[str, list[str]] = {
+            "1m": ["5m", "15m", "1h"],
+            "5m": ["15m", "1h", "4h"],
+            "15m": ["1h", "4h", "1d"],
+            "30m": ["1h", "4h", "1d"],
+            "1h": ["4h", "1d"],
+        }
+        tf_str = feature_cfg.get("timeframe", "15m")
+        mtf_intervals = feature_cfg.get(
+            "multi_timeframe_intervals",
+            _default_mtf.get(tf_str, ["1h", "4h", "1d"]),
+        )
+        for every in mtf_intervals:
+            prefix = f"tf_{every}_"
             tf_df = build_multi_timeframe_features(mtf_source, every=every, prefix=prefix)
             feature_df = feature_df.join_asof(tf_df.sort("dt"), on="dt", strategy="backward")
 
@@ -296,12 +312,25 @@ def build_features(raw_df: pl.DataFrame, feature_cfg: dict[str, Any] | None = No
             [pl.Series(f"corr_btc_eth_{window}", rolling_corr(btc_ret, eth_ret, window)) for window in [15, 30, 60, 120]]
         )
 
+    # Volatility regime: compare recent realized vol (~1 h) to its longer-term
+    # rolling mean (~4 h) to flag elevated-volatility bars.
+    # Window sizes adapt to the base timeframe so the real-time horizons stay
+    # consistent (at 1m: 60/240 bars; at 15m: 5/20 bars).
+    _tf_minutes = {"1m": 1, "5m": 5, "15m": 15, "30m": 30, "1h": 60}.get(
+        feature_cfg.get("timeframe", "15m"), 15,
+    )
+    _available_windows = [5, 10, 20, 30, 60, 120]
+    _vol_target = max(5, int(60 / _tf_minutes))          # ~1 h in bars, min 5
+    _vol_window = min(_available_windows, key=lambda w: abs(w - _vol_target))
+    _regime_window = max(16, int(240 / _tf_minutes))      # ~4 h in bars, min 16
+    _vol_col = f"realized_vol_{_vol_window}"
+
     feature_df = feature_df.with_columns(
         [
-            pl.col("realized_vol_60").alias("realized_vol_60_base"),
+            pl.col(_vol_col).alias("realized_vol_base"),
             (
-                pl.col("realized_vol_60")
-                > (pl.col("realized_vol_60").rolling_mean(window_size=240) + 1e-9)
+                pl.col(_vol_col)
+                > (pl.col(_vol_col).rolling_mean(window_size=_regime_window) + 1e-9)
             ).cast(pl.Int8).alias("volatility_regime"),
         ]
     )

@@ -99,7 +99,7 @@ def load_historical_data(config: dict[str, Any]) -> tuple[pl.DataFrame, dict[str
     dataset_cfg = config.get("dataset", {})
     source_mode = str(dataset_cfg.get("source_mode", "exchange"))
     snapshot_cfg = config.get("snapshot", {})
-    snapshot_path = Path(str(snapshot_cfg.get("path", "snapshots/btcusdt_1m.parquet")))
+    snapshot_path = Path(str(snapshot_cfg.get("path", "snapshots/btcusdt_15m.parquet")))
 
     if source_mode == "snapshot":
         raw_df = _read_snapshot(snapshot_path)
@@ -111,7 +111,9 @@ def load_historical_data(config: dict[str, Any]) -> tuple[pl.DataFrame, dict[str
         raise ValueError(f"Unsupported dataset source mode: {source_mode}")
 
     raw_df = raw_df.sort("timestamp")
-    feature_df = build_features(raw_df, feature_cfg=config.get("features", {}))
+    feature_cfg = dict(config.get("features", {}))
+    feature_cfg.setdefault("timeframe", config.get("asset", {}).get("timeframe", "15m"))
+    feature_df = build_features(raw_df, feature_cfg=feature_cfg)
     metadata = build_dataset_metadata(feature_df, source_mode=source_mode, source_ref=source_ref)
     return feature_df, metadata
 

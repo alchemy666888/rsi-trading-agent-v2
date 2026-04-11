@@ -14,6 +14,19 @@ import lightgbm as lgb
 
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 
+# Maps timeframe strings to bar duration in minutes, used for annualization
+# and funding-interval calculations throughout the pipeline.
+TIMEFRAME_MINUTES: dict[str, int] = {
+    "1m": 1, "3m": 3, "5m": 5, "15m": 15, "30m": 30,
+    "1h": 60, "2h": 120, "4h": 240, "1d": 1440,
+}
+
+
+def annualization_factor(timeframe: str = "15m") -> float:
+    """Return sqrt(bars_per_year) for Sharpe ratio annualization."""
+    minutes = TIMEFRAME_MINUTES.get(timeframe, 15)
+    return math.sqrt(365 * 24 * 60 / minutes)
+
 
 def metric_float(metric: Any) -> float:
     arr = np.asarray(metric, dtype=float).reshape(-1)
@@ -22,7 +35,13 @@ def metric_float(metric: Any) -> float:
     return float(np.nan_to_num(arr[0], nan=0.0, posinf=0.0, neginf=0.0))
 
 
-def compute_run_metrics(returns: list[float], equity_curve: list[float], initial_equity: float, trades: list[dict[str, Any]]) -> dict[str, float]:
+def compute_run_metrics(
+    returns: list[float],
+    equity_curve: list[float],
+    initial_equity: float,
+    trades: list[dict[str, Any]],
+    timeframe: str = "15m",
+) -> dict[str, float]:
     if not returns:
         return {
             "sharpe": 0.0,
@@ -35,8 +54,8 @@ def compute_run_metrics(returns: list[float], equity_curve: list[float], initial
     returns_array = np.array(returns, dtype=float)
     mean_return = float(returns_array.mean())
     std_return = float(returns_array.std(ddof=1)) if len(returns_array) > 1 else 0.0
-    annualization = math.sqrt(365 * 24 * 60)
-    sharpe = (mean_return / std_return) * annualization if std_return > 1e-12 else 0.0
+    ann = annualization_factor(timeframe)
+    sharpe = (mean_return / std_return) * ann if std_return > 1e-12 else 0.0
 
     equity_array = np.array([initial_equity] + equity_curve, dtype=float)
     rolling_max = np.maximum.accumulate(equity_array)
@@ -69,13 +88,14 @@ def simulate_policy(
     initial_equity: float,
     slippage_bps: float,
     timestamp: np.ndarray | None = None,
+    timeframe: str = "15m",
 ) -> dict[str, Any]:
     if close.shape[0] < 2:
         return {
             "returns": [],
             "equity_curve": [],
             "trades": [],
-            "metrics": compute_run_metrics([], [], initial_equity, []),
+            "metrics": compute_run_metrics([], [], initial_equity, [], timeframe=timeframe),
         }
 
     position = 0
@@ -137,7 +157,7 @@ def simulate_policy(
         "returns": returns,
         "equity_curve": equity_curve,
         "trades": trades,
-        "metrics": compute_run_metrics(returns, equity_curve, initial_equity, trades),
+        "metrics": compute_run_metrics(returns, equity_curve, initial_equity, trades, timeframe=timeframe),
     }
 
 
@@ -148,6 +168,7 @@ def calibrate_thresholds(
 ) -> tuple[dict[str, float], dict[str, Any]]:
     sim_cfg = config["simulation"]
     risk_cfg = config.get("risk", {})
+    timeframe = config.get("asset", {}).get("timeframe", "15m")
     close = validation_df["close"].to_numpy()
     regime = validation_df["volatility_regime"].to_numpy()
     timestamps = validation_df["timestamp"].to_numpy()
@@ -161,7 +182,7 @@ def calibrate_thresholds(
         }
         if params["short_threshold"] >= params["long_threshold"]:
             return -10.0
-        result = simulate_policy(close, probs, regime, params, risk_cfg, initial_equity, slippage_bps, timestamps)
+        result = simulate_policy(close, probs, regime, params, risk_cfg, initial_equity, slippage_bps, timestamps, timeframe=timeframe)
         return float(result["metrics"]["sharpe"])
 
     study = optuna.create_study(direction="maximize")
@@ -229,6 +250,7 @@ def run_walk_forward_backtest(
 ) -> dict[str, Any]:
     sim_cfg = config["simulation"]
     risk_cfg = config.get("risk", {})
+    timeframe = config.get("asset", {}).get("timeframe", "15m")
     initial_equity = float(sim_cfg["initial_equity"])
     slippage_bps = float(sim_cfg["slippage_bps"])
 
@@ -263,6 +285,7 @@ def run_walk_forward_backtest(
                 initial_equity,
                 slippage_bps,
                 test_df["timestamp"].to_numpy(),
+                timeframe=timeframe,
             )
             fold_results.append(
                 {
