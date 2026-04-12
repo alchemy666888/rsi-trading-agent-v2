@@ -88,6 +88,13 @@ def choose_position(prob_up: float, long_threshold: float, short_threshold: floa
     return 0
 
 
+def drop_terminal_supervised_row(segment: pl.DataFrame) -> pl.DataFrame:
+    """Drop the terminal row so one-bar-horizon logic cannot cross split edges."""
+    if segment.height <= 1:
+        return segment.slice(0, 0)
+    return segment.slice(0, segment.height - 1)
+
+
 def simulate_policy(
     close: np.ndarray,
     probs: np.ndarray,
@@ -186,6 +193,7 @@ def simulate_policy(
             trades.append(
                 {
                     "bar_index": idx,
+                    "bar_timestamp": execution_timestamp,
                     "signal_bar_index": signal_idx,
                     "execution_bar_index": idx,
                     "signal_timestamp": signal_timestamp,
@@ -256,6 +264,22 @@ def calibrate_thresholds(
     probs: np.ndarray,
     config: dict[str, Any],
 ) -> tuple[dict[str, float], dict[str, Any]]:
+    usable_rows = min(int(validation_df.height), int(len(probs)))
+    if usable_rows <= 1:
+        return {
+            "long_threshold": 0.6,
+            "short_threshold": 0.4,
+        }, {
+            "split": "validation",
+            "objective_name": "validation_sharpe",
+            "objective_value": 0.0,
+            "affects_future_oos_only": True,
+            "insufficient_rows": True,
+            "rows_used": usable_rows,
+        }
+    validation_df = validation_df.slice(0, usable_rows)
+    probs = np.asarray(probs, dtype=float)[:usable_rows]
+
     sim_cfg = config["simulation"]
     risk_cfg = config.get("risk", {})
     timeframe = config.get("asset", {}).get("timeframe", "15m")
@@ -367,10 +391,14 @@ def run_walk_forward_backtest(
         folds = build_walk_forward_folds(config, split_metadata, data.height, mode)
         fold_results: list[dict[str, Any]] = []
         for fold in folds:
-            train_df = data.slice(fold["train_start"], fold["train_end"] - fold["train_start"])
-            validation_df = data.slice(fold["validation_start"], fold["validation_end"] - fold["validation_start"])
-            test_df = data.slice(fold["test_start"], fold["test_end"] - fold["test_start"])
-            if min(train_df.height, validation_df.height, test_df.height) < 20:
+            train_rows = max(0, int(fold["train_end"]) - int(fold["train_start"]))
+            validation_df_raw = data.slice(fold["validation_start"], fold["validation_end"] - fold["validation_start"])
+            test_df_raw = data.slice(fold["test_start"], fold["test_end"] - fold["test_start"])
+            validation_df = drop_terminal_supervised_row(validation_df_raw)
+            test_df = drop_terminal_supervised_row(test_df_raw)
+            if min(train_rows, validation_df_raw.height, test_df_raw.height) < 20:
+                continue
+            if min(validation_df.height, test_df.height) < 2:
                 continue
 
             x_train, y_train = build_training_arrays_no_leakage(
@@ -402,9 +430,11 @@ def run_walk_forward_backtest(
                 funding_rate_per_8h=funding_rate_per_8h,
                 timeframe=timeframe,
             )
+            test_bars_evaluated = max(0, test_df.height - 1)
             fold_results.append(
                 {
                     **fold,
+                    "test_bars_evaluated": test_bars_evaluated,
                     "long_threshold": float(best_params["long_threshold"]),
                     "short_threshold": float(best_params["short_threshold"]),
                     "optimization_meta": optimization_meta,
@@ -423,7 +453,7 @@ def run_walk_forward_backtest(
                 "total_test_bars": 0,
             }
 
-        total_test_bars = int(sum(max(0, int(fold["test_end"]) - int(fold["test_start"])) for fold in fold_results))
+        total_test_bars = int(sum(max(0, int(fold.get("test_bars_evaluated", 0))) for fold in fold_results))
         return {
             "folds": fold_results,
             "mean_sharpe": float(np.mean([fold["sharpe"] for fold in fold_results])),

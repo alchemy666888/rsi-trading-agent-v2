@@ -313,11 +313,14 @@ def evaluate_node(state: AgentState) -> AgentState:
     realized_pnl_pct: float | None = None
 
     if target_position != current_position:
+        bar_timestamp = int(state["current_row"]["timestamp"])
         signal_timestamp = int(applied_signal.get("signal_timestamp", state["prediction"]["signal_timestamp"]))
-        execution_timestamp = int(applied_signal.get("execution_timestamp", state["prediction"]["execution_timestamp"]))
+        # Execution timestamp follows the execution bar where the new position
+        # is active. Keep this invariant explicit for auditability.
+        execution_timestamp = bar_timestamp
         trade_event = {
             "cycle": len(returns),
-            "bar_timestamp": int(state["current_row"]["timestamp"]),
+            "bar_timestamp": bar_timestamp,
             "signal_timestamp": signal_timestamp,
             "execution_timestamp": execution_timestamp,
             "action": state["last_action"],
@@ -363,9 +366,7 @@ def evaluate_node(state: AgentState) -> AgentState:
     if target_position != current_position:
         entry_price = None if target_position == 0 else close_now
         entry_cycle = None if target_position == 0 else len(returns)
-        entry_timestamp = None if target_position == 0 else int(
-            applied_signal.get("execution_timestamp", state["prediction"]["execution_timestamp"])
-        )
+        entry_timestamp = None if target_position == 0 else int(state["current_row"]["timestamp"])
     if target_position != current_position and target_position != 0:
         emit_event(
             state,

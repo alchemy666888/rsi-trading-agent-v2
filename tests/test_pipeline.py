@@ -21,6 +21,7 @@ from agents.evaluation import (
     build_walk_forward_folds,
     calibrate_thresholds,
     choose_position,
+    drop_terminal_supervised_row,
     run_walk_forward_backtest,
     simulate_policy,
 )
@@ -69,6 +70,9 @@ def build_test_config() -> dict:
             "purge_bars": 5,
             "min_folds_per_mode": 1,
             "min_total_test_bars": 40,
+        },
+        "readiness": {
+            "min_historical_windows": 5,
         },
         "logging": {
             "level": "INFO",
@@ -226,6 +230,12 @@ class PipelineTests(unittest.TestCase):
             split_metadata["oos_start"],
             split_metadata["validation_end"] + max(split_metadata["purge_bars"], split_metadata["required_embargo_gap"]),
         )
+
+    def test_drop_terminal_supervised_row_trims_last_bar(self) -> None:
+        df = pl.DataFrame({"timestamp": [1, 2, 3], "close": [10.0, 11.0, 12.0]})
+        trimmed = drop_terminal_supervised_row(df)
+        self.assertEqual(trimmed.height, 2)
+        self.assertEqual(trimmed["timestamp"].to_list(), [1, 2])
 
     def test_train_lightgbm_baseline_avoids_split_boundary_label_leakage(self) -> None:
         feature_df = pl.DataFrame(
@@ -584,6 +594,10 @@ class PipelineTests(unittest.TestCase):
             [int(trade["signal_timestamp"]) for trade in runtime_state["trades"]],
         )
         self.assertEqual(len(simulation["completed_trades"]), len(runtime_state["completed_trades"]))
+        for sim_trade in simulation["trades"]:
+            self.assertEqual(int(sim_trade["bar_timestamp"]), int(sim_trade["execution_timestamp"]))
+        for runtime_trade in runtime_state["trades"]:
+            self.assertEqual(int(runtime_trade["bar_timestamp"]), int(runtime_trade["execution_timestamp"]))
 
     def test_simulate_policy_applies_funding_cost(self) -> None:
         close = np.array([100.0] * 10, dtype=float)
@@ -611,6 +625,62 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(len(result["returns"]), 9)
         self.assertLess(result["returns"][7], 0.0)
         self.assertAlmostEqual(sum(result["returns"]), -0.01, places=9)
+
+    def test_stop_loss_flatten_is_delayed_by_signal_delay(self) -> None:
+        timestamps = np.array([10, 20, 30, 40, 50], dtype=int)
+        result = simulate_policy(
+            close=np.array([100.0, 100.0, 90.0, 89.0, 89.0], dtype=float),
+            probs=np.array([0.9, 0.9, 0.9, 0.9, 0.9], dtype=float),
+            volatility_regime=np.zeros(5, dtype=int),
+            strategy_params={"long_threshold": 0.6, "short_threshold": 0.4},
+            risk_cfg={
+                "max_abs_position": 1,
+                "max_turnover_per_bar": 2,
+                "block_high_volatility": False,
+                "stop_loss_pct": 0.05,
+                "take_profit_pct": 0.0,
+            },
+            initial_equity=10000.0,
+            slippage_bps=0.0,
+            timestamp=timestamps,
+            signal_delay_bars=1,
+            funding_rate_per_8h=0.0,
+            timeframe="15m",
+        )
+        self.assertGreaterEqual(len(result["trades"]), 2)
+        self.assertEqual(result["trades"][0]["action"], "LONG")
+        self.assertEqual(result["trades"][1]["action"], "FLAT")
+        self.assertEqual(int(result["trades"][1]["execution_timestamp"]), int(timestamps[3]))
+        self.assertEqual(
+            int(result["trades"][1]["execution_timestamp"]) - int(timestamps[2]),
+            int(timestamps[1] - timestamps[0]),
+        )
+
+    def test_take_profit_flatten_is_delayed_by_signal_delay(self) -> None:
+        timestamps = np.array([10, 20, 30, 40, 50], dtype=int)
+        result = simulate_policy(
+            close=np.array([100.0, 100.0, 110.0, 111.0, 111.0], dtype=float),
+            probs=np.array([0.9, 0.9, 0.9, 0.9, 0.9], dtype=float),
+            volatility_regime=np.zeros(5, dtype=int),
+            strategy_params={"long_threshold": 0.6, "short_threshold": 0.4},
+            risk_cfg={
+                "max_abs_position": 1,
+                "max_turnover_per_bar": 2,
+                "block_high_volatility": False,
+                "stop_loss_pct": 0.0,
+                "take_profit_pct": 0.05,
+            },
+            initial_equity=10000.0,
+            slippage_bps=0.0,
+            timestamp=timestamps,
+            signal_delay_bars=1,
+            funding_rate_per_8h=0.0,
+            timeframe="15m",
+        )
+        self.assertGreaterEqual(len(result["trades"]), 2)
+        self.assertEqual(result["trades"][0]["action"], "LONG")
+        self.assertEqual(result["trades"][1]["action"], "FLAT")
+        self.assertEqual(int(result["trades"][1]["execution_timestamp"]), int(timestamps[3]))
 
     def test_drawdown_pause_and_high_vol_block(self) -> None:
         state = {
@@ -654,15 +724,41 @@ class PipelineTests(unittest.TestCase):
             self.assertTrue((artifact_path / "report.md").exists())
             self.assertTrue((artifact_path / "report.json").exists())
             self.assertTrue((artifact_path / "benchmark_metrics.json").exists())
+            self.assertTrue((artifact_path / "benchmark_sufficiency.json").exists())
             self.assertTrue((artifact_path / "readiness.json").exists())
+            self.assertTrue((artifact_path / "regression_ledger_entry.json").exists())
+            self.assertTrue((artifact_path / "regression_ledger_snapshot.json").exists())
             self.assertTrue((artifact_path / "decision_log.jsonl").exists())
             self.assertTrue((artifact_path / "decision_summary.csv").exists())
             self.assertTrue((artifact_path / "returns.csv").exists())
+            self.assertTrue((artifact_path.parent / "regression_ledger.json").exists())
             report_text = (artifact_path / "report.md").read_text(encoding="utf-8")
             self.assertIn("Run Metadata", report_text)
             self.assertIn("Headline KPIs", report_text)
             benchmark_payload = json.loads((artifact_path / "benchmark_metrics.json").read_text(encoding="utf-8"))
             self.assertIn("expanding", benchmark_payload)
+
+    def test_regression_ledger_appends_across_runs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            state_a = self._build_artifact_state(trade_count=1, completed_trade_count=1)
+            state_a["run_id"] = "run-a"
+            state_a["artifact_dir"] = "artifacts/run-a"
+            state_a["dataset_metadata"]["timestamp_start"] = 1_700_000_000_000
+            state_a["dataset_metadata"]["timestamp_end"] = 1_700_001_000_000
+            persist_run_artifacts(root, state_a)
+
+            state_b = self._build_artifact_state(trade_count=1, completed_trade_count=1)
+            state_b["run_id"] = "run-b"
+            state_b["artifact_dir"] = "artifacts/run-b"
+            state_b["dataset_metadata"]["timestamp_start"] = 1_700_010_000_000
+            state_b["dataset_metadata"]["timestamp_end"] = 1_700_011_000_000
+            persist_run_artifacts(root, state_b)
+
+            ledger = json.loads((root / "artifacts" / "regression_ledger.json").read_text(encoding="utf-8"))
+            self.assertEqual(len(ledger), 2)
+            self.assertEqual(ledger[0]["run_id"], "run-a")
+            self.assertEqual(ledger[1]["run_id"], "run-b")
 
     def test_report_trade_count_prefers_run_metrics(self) -> None:
         state = self._build_artifact_state(trade_count=3, completed_trade_count=1)
@@ -798,10 +894,22 @@ class PipelineTests(unittest.TestCase):
         )
         self.assertTrue(any("both negative" in message for message in out["overfit_warnings"]))
 
-    def test_evaluate_readiness_triggers_triple_negative_warning(self) -> None:
+    def test_evaluate_readiness_rejects_triple_negative_sharpe(self) -> None:
         readiness = evaluate_readiness(
             {
+                "config": build_test_config(),
                 "dataset_metadata": {"source_mode": "snapshot"},
+                "regression_history": [
+                    {
+                        "dataset_window": {
+                            "snapshot_hash": "sha-a",
+                            "raw_data_hash": "raw-a",
+                            "dataset_hash": "ds-a",
+                            "timestamp_start": 1,
+                            "timestamp_end": 2,
+                        }
+                    }
+                ],
                 "optimization_events": [{"objective_value": -0.7}],
                 "trades": [],
                 "completed_trades": [],
@@ -820,12 +928,28 @@ class PipelineTests(unittest.TestCase):
                 },
             }
         )
+        blocker_codes = {row["code"] for row in readiness["hard_blockers"]}
+        self.assertIn("triple_negative_sharpe", blocker_codes)
+        self.assertEqual(readiness["phase_gate_decision"], "do_not_advance")
+        self.assertFalse(readiness["fine_tuning_gate_open"])
         self.assertTrue(readiness["warnings"])
 
     def test_evaluate_readiness_blocks_exchange_mode(self) -> None:
         readiness = evaluate_readiness(
             {
+                "config": build_test_config(),
                 "dataset_metadata": {"source_mode": "exchange"},
+                "regression_history": [
+                    {
+                        "dataset_window": {
+                            "snapshot_hash": "sha-a",
+                            "raw_data_hash": "raw-a",
+                            "dataset_hash": "ds-a",
+                            "timestamp_start": 1,
+                            "timestamp_end": 2,
+                        }
+                    }
+                ],
                 "optimization_events": [{"objective_value": 0.2}],
                 "trades": [],
                 "completed_trades": [],
@@ -847,6 +971,84 @@ class PipelineTests(unittest.TestCase):
         blocker_codes = {row["code"] for row in readiness["hard_blockers"]}
         self.assertIn("exchange_mode_not_regression_eligible", blocker_codes)
         self.assertFalse(readiness["fine_tuning_gate_open"])
+
+    def test_evaluate_readiness_rejects_missing_regression_history(self) -> None:
+        readiness = evaluate_readiness(
+            {
+                "config": build_test_config(),
+                "dataset_metadata": {"source_mode": "snapshot"},
+                "optimization_events": [{"objective_value": 0.2}],
+                "trades": [],
+                "completed_trades": [],
+                "performance": {
+                    "run_metrics": {
+                        "sharpe": 0.1,
+                        "bar_win_rate": 0.5,
+                        "transition_count": 0,
+                        "completed_trade_win_rate": 0.0,
+                        "completed_trade_count": 0,
+                    },
+                    "benchmark_metrics": {
+                        "overall": {"mean_sharpe": 0.05},
+                        "sufficiency": {"overall_sufficient": True},
+                    },
+                },
+            }
+        )
+        blocker_codes = {row["code"] for row in readiness["hard_blockers"]}
+        self.assertIn("regression_history_missing", blocker_codes)
+        self.assertEqual(readiness["phase_gate_decision"], "do_not_advance")
+
+    def test_evaluate_readiness_rejects_single_window_evidence(self) -> None:
+        config = build_test_config()
+        config["readiness"]["min_historical_windows"] = 3
+        readiness = evaluate_readiness(
+            {
+                "config": config,
+                "dataset_metadata": {
+                    "source_mode": "snapshot",
+                    "snapshot_hash": "sha-current",
+                    "raw_data_hash": "raw-current",
+                    "dataset_hash": "ds-current",
+                    "timestamp_start": 10,
+                    "timestamp_end": 20,
+                },
+                "regression_history": [
+                    {
+                        "dataset_window": {
+                            "snapshot_hash": "sha-current",
+                            "raw_data_hash": "raw-current",
+                            "dataset_hash": "ds-current",
+                            "timestamp_start": 10,
+                            "timestamp_end": 20,
+                        }
+                    }
+                ],
+                "optimization_events": [{"objective_value": 0.2}],
+                "trades": [],
+                "completed_trades": [],
+                "performance": {
+                    "run_metrics": {
+                        "sharpe": 0.1,
+                        "bar_win_rate": 0.5,
+                        "transition_count": 0,
+                        "completed_trade_win_rate": 0.0,
+                        "completed_trade_count": 0,
+                    },
+                    "benchmark_metrics": {
+                        "overall": {"mean_sharpe": 0.05},
+                        "sufficiency": {"overall_sufficient": True},
+                    },
+                },
+            }
+        )
+        blocker_codes = {row["code"] for row in readiness["hard_blockers"]}
+        self.assertIn("multi_window_history_insufficient", blocker_codes)
+        self.assertFalse(readiness["fine_tuning_gate_open"])
+
+    def test_development_plan_matches_default_timeframe(self) -> None:
+        plan_text = (PROJECT_ROOT / "docs" / "development-plan.md").read_text(encoding="utf-8")
+        self.assertIn("BTC 15m data", plan_text)
 
 
 if __name__ == "__main__":

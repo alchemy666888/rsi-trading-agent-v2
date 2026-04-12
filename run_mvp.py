@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import subprocess
 import sys
@@ -58,6 +59,23 @@ def _relative_artifact_dir(config: dict[str, Any], run_id: str) -> str:
     return str(artifact_root / run_id)
 
 
+def _artifact_root_from_run_dir(project_root: Path, artifact_dir: str) -> Path:
+    return (project_root / artifact_dir).parent
+
+
+def _load_regression_ledger(project_root: Path, artifact_dir: str) -> list[dict[str, Any]]:
+    ledger_path = _artifact_root_from_run_dir(project_root, artifact_dir) / "regression_ledger.json"
+    if not ledger_path.exists():
+        return []
+    try:
+        payload = json.loads(ledger_path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    if not isinstance(payload, list):
+        return []
+    return [row for row in payload if isinstance(row, dict)]
+
+
 def _build_error_info(exc: Exception) -> dict[str, Any]:
     return {
         "error_type": exc.__class__.__name__,
@@ -90,6 +108,8 @@ def _auto_stage_run_artifacts(project_root: Path, artifact_path: Path, config: d
 
 
 def evaluate_readiness(state: AgentState) -> dict[str, Any]:
+    config = dict(state.get("config", {}))
+    readiness_cfg = dict(config.get("readiness", {}))
     optimization_events = list(state.get("optimization_events", []))
     validation_sharpe = 0.0
     if optimization_events:
@@ -104,10 +124,9 @@ def evaluate_readiness(state: AgentState) -> dict[str, Any]:
     source_mode = str(dataset_metadata.get("source_mode", "unknown"))
 
     warnings: list[str] = []
-    if validation_sharpe < 0.0 and walk_forward_mean_sharpe < 0.0 and held_out_sharpe < 0.0:
-        warnings.append(
-            "Validation Sharpe, walk-forward mean Sharpe, and held-out Sharpe are all negative."
-        )
+    triple_negative_sharpe = validation_sharpe < 0.0 and walk_forward_mean_sharpe < 0.0 and held_out_sharpe < 0.0
+    if triple_negative_sharpe:
+        warnings.append("Validation Sharpe, walk-forward mean Sharpe, and held-out Sharpe are all negative.")
 
     required_kpi_fields = {
         "bar_win_rate",
@@ -139,8 +158,40 @@ def evaluate_readiness(state: AgentState) -> dict[str, Any]:
     execution_semantics_consistent = misaligned_trade_events == 0
 
     sufficiency = dict(benchmark_metrics.get("sufficiency", {}))
-    walk_forward_sufficient = bool(sufficiency.get("overall_sufficient", False))
+    benchmark_sufficiency_artifact_available = bool(sufficiency)
+    walk_forward_sufficient = bool(sufficiency.get("overall_sufficient", False)) if benchmark_sufficiency_artifact_available else False
     snapshot_based = source_mode == "snapshot"
+    regression_history = [row for row in state.get("regression_history", []) if isinstance(row, dict)]
+    regression_history_entry_count = len(regression_history)
+    regression_tracking_available = regression_history_entry_count > 0
+    min_historical_windows = max(1, int(readiness_cfg.get("min_historical_windows", 5)))
+    current_window_key = "|".join(
+        [
+            str(dataset_metadata.get("snapshot_hash", "n/a")),
+            str(dataset_metadata.get("raw_data_hash", "n/a")),
+            str(dataset_metadata.get("dataset_hash", "n/a")),
+            str(dataset_metadata.get("timestamp_start", "n/a")),
+            str(dataset_metadata.get("timestamp_end", "n/a")),
+        ]
+    )
+    historical_window_keys: set[str] = set()
+    for row in regression_history:
+        dataset_window = row.get("dataset_window", {})
+        if not isinstance(dataset_window, dict):
+            dataset_window = {}
+        key = "|".join(
+            [
+                str(dataset_window.get("snapshot_hash", row.get("snapshot_hash", "n/a"))),
+                str(dataset_window.get("raw_data_hash", row.get("raw_data_hash", "n/a"))),
+                str(dataset_window.get("dataset_hash", row.get("dataset_hash", "n/a"))),
+                str(dataset_window.get("timestamp_start", row.get("timestamp_start", "n/a"))),
+                str(dataset_window.get("timestamp_end", row.get("timestamp_end", "n/a"))),
+            ]
+        )
+        historical_window_keys.add(key)
+    historical_window_keys.add(current_window_key)
+    historical_window_count = len(historical_window_keys)
+    multi_window_evidence_sufficient = historical_window_count >= min_historical_windows
 
     engineering_blockers: list[dict[str, Any]] = []
     if not execution_semantics_consistent:
@@ -163,6 +214,18 @@ def evaluate_readiness(state: AgentState) -> dict[str, Any]:
             }
         )
 
+    research_blockers: list[dict[str, Any]] = []
+    if triple_negative_sharpe:
+        research_blockers.append(
+            {
+                "code": "triple_negative_sharpe",
+                "message": "Validation, walk-forward, and held-out Sharpe are all negative.",
+                "validation_sharpe": validation_sharpe,
+                "walk_forward_mean_sharpe": walk_forward_mean_sharpe,
+                "held_out_sharpe": held_out_sharpe,
+            }
+        )
+
     evidence_blockers: list[dict[str, Any]] = []
     if not snapshot_based:
         evidence_blockers.append(
@@ -172,7 +235,14 @@ def evaluate_readiness(state: AgentState) -> dict[str, Any]:
                 "source_mode": source_mode,
             }
         )
-    if not walk_forward_sufficient:
+    if not benchmark_sufficiency_artifact_available:
+        evidence_blockers.append(
+            {
+                "code": "benchmark_sufficiency_missing",
+                "message": "Benchmark sufficiency metadata artifact is missing.",
+            }
+        )
+    elif not walk_forward_sufficient:
         evidence_blockers.append(
             {
                 "code": "walk_forward_evidence_insufficient",
@@ -180,33 +250,72 @@ def evaluate_readiness(state: AgentState) -> dict[str, Any]:
                 "sufficiency": sufficiency,
             }
         )
+    if not regression_tracking_available:
+        evidence_blockers.append(
+            {
+                "code": "regression_history_missing",
+                "message": "No persisted regression history is available.",
+                "regression_history_entry_count": regression_history_entry_count,
+            }
+        )
+    if not multi_window_evidence_sufficient:
+        evidence_blockers.append(
+            {
+                "code": "multi_window_history_insufficient",
+                "message": "Insufficient historical windows in persisted regression history.",
+                "historical_window_count": historical_window_count,
+                "minimum_required": min_historical_windows,
+            }
+        )
 
-    hard_blockers = [*engineering_blockers, *evidence_blockers]
+    engineering_green = not engineering_blockers
+    research_green = not research_blockers
+    evidence_green = not evidence_blockers
+    hard_blockers = [*engineering_blockers, *research_blockers, *evidence_blockers]
     if hard_blockers:
         warnings.append(
             "Readiness hard blockers are present; do not advance to fine-tuning or next phase."
         )
+    if not multi_window_evidence_sufficient:
+        warnings.append(
+            "Fine-tuning gate remains closed until multi-window regression evidence meets minimum history requirements."
+        )
+
+    phase_gate_green = engineering_green and research_green and evidence_green
 
     return {
         "validation_sharpe": validation_sharpe,
         "walk_forward_mean_sharpe": walk_forward_mean_sharpe,
         "held_out_sharpe": held_out_sharpe,
         "bad_research_performance": {
-            "triple_negative_sharpe": validation_sharpe < 0.0 and walk_forward_mean_sharpe < 0.0 and held_out_sharpe < 0.0,
+            "triple_negative_sharpe": triple_negative_sharpe,
         },
         "engineering_validity": {
+            "green": engineering_green,
             "execution_semantics_consistent": execution_semantics_consistent,
             "kpi_schema_consistent": kpi_schema_consistent,
             "engineering_blockers": engineering_blockers,
         },
+        "research_validity": {
+            "green": research_green,
+            "triple_negative_sharpe": triple_negative_sharpe,
+            "research_blockers": research_blockers,
+        },
         "evidence_sufficiency": {
+            "green": evidence_green,
             "snapshot_based": snapshot_based,
             "walk_forward_sufficient": walk_forward_sufficient,
+            "benchmark_sufficiency_artifact_available": benchmark_sufficiency_artifact_available,
+            "regression_tracking_available": regression_tracking_available,
+            "regression_history_entry_count": regression_history_entry_count,
+            "historical_window_count": historical_window_count,
+            "minimum_historical_windows": min_historical_windows,
+            "multi_window_evidence_sufficient": multi_window_evidence_sufficient,
             "evidence_blockers": evidence_blockers,
         },
         "hard_blockers": hard_blockers,
-        "phase_gate_decision": "advance" if not hard_blockers else "do_not_advance",
-        "fine_tuning_gate_open": not hard_blockers,
+        "phase_gate_decision": "advance" if phase_gate_green else "do_not_advance",
+        "fine_tuning_gate_open": phase_gate_green and multi_window_evidence_sufficient,
         "warnings": warnings,
     }
 
@@ -282,6 +391,7 @@ def main() -> None:
             message="Out-of-sample simulation loop completed.",
             completed_cycles=len(final_state.get("returns", [])),
         )
+        final_state["regression_history"] = _load_regression_ledger(PROJECT_ROOT, artifact_dir)
         readiness = evaluate_readiness(final_state)
         final_state["readiness"] = readiness
         if readiness.get("warnings") or readiness.get("hard_blockers"):

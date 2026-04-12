@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from typing import Any
 
+import numpy as np
+
 from agents.data import compute_split_metadata, load_historical_data
-from agents.evaluation import calibrate_thresholds, run_walk_forward_backtest
+from agents.evaluation import calibrate_thresholds, drop_terminal_supervised_row, run_walk_forward_backtest
 from agents.logging_utils import RunEventLogger, utc_now_iso
 from agents.modeling import derive_shap_rule, train_lightgbm_baseline
 from agents.state import AgentState
@@ -68,17 +70,23 @@ def prepare_experiment(
         top_feature=feature_importances[0]["feature"] if feature_importances else None,
     )
 
-    validation_df = historical_data.slice(
+    validation_df_raw = historical_data.slice(
         split_metadata["validation_start"],
         split_metadata["validation_end"] - split_metadata["validation_start"],
     )
+    validation_df = drop_terminal_supervised_row(validation_df_raw)
     _emit_setup_event(
         event_logger,
         event_type="threshold_calibration_started",
         message="Validation threshold calibration started.",
-        validation_rows=validation_df.height,
+        validation_rows_raw=validation_df_raw.height,
+        validation_rows_supervised=validation_df.height,
     )
-    validation_probs = model.predict_proba(validation_df.select(feature_columns).to_numpy())[:, 1]
+    validation_probs = (
+        model.predict_proba(validation_df.select(feature_columns).to_numpy())[:, 1]
+        if validation_df.height > 0
+        else np.array([], dtype=float)
+    )
     strategy_params, optimization_meta = calibrate_thresholds(validation_df, validation_probs, config)
     _emit_setup_event(
         event_logger,

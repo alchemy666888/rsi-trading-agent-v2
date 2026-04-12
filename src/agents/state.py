@@ -104,5 +104,6 @@ class AgentState(TypedDict, total=False):
     shap_rule: str
     shap_rules: list[str]
     readiness: dict[str, Any]
+    regression_history: list[dict[str, Any]]
     data_metadata: dict[str, Any]
     run_metadata: dict[str, Any]

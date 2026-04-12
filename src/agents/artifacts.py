@@ -98,6 +98,85 @@ def _normalize_error_info(error_info: dict[str, Any] | None) -> dict[str, Any]:
     }
 
 
+def _build_benchmark_sufficiency_payload(benchmark_metrics: dict[str, Any]) -> dict[str, Any]:
+    sufficiency = dict(benchmark_metrics.get("sufficiency", {}))
+    expanding = dict(sufficiency.get("expanding", {}))
+    rolling = dict(sufficiency.get("rolling", {}))
+    return {
+        "generated_at_utc": _utc_now(),
+        "overall_sufficient": bool(sufficiency.get("overall_sufficient", False)),
+        "acceptance_thresholds": {
+            "min_folds_per_mode": int(sufficiency.get("min_folds_per_mode", 0)),
+            "min_total_test_bars": int(sufficiency.get("min_total_test_bars", 0)),
+        },
+        "expanding": {
+            "fold_count": int(expanding.get("fold_count", 0)),
+            "total_test_bars": int(expanding.get("total_test_bars", 0)),
+            "sufficient": bool(expanding.get("sufficient", False)),
+            "reasons": list(expanding.get("reasons", [])),
+        },
+        "rolling": {
+            "fold_count": int(rolling.get("fold_count", 0)),
+            "total_test_bars": int(rolling.get("total_test_bars", 0)),
+            "sufficient": bool(rolling.get("sufficient", False)),
+            "reasons": list(rolling.get("reasons", [])),
+        },
+        "failure_reasons": list(sufficiency.get("reasons", [])),
+    }
+
+
+def _build_regression_ledger_entry(state: AgentState) -> dict[str, Any]:
+    run_metadata = dict(state.get("run_metadata", {}))
+    dataset_metadata = dict(state.get("dataset_metadata", {}))
+    run_metrics = dict(state.get("performance", {}).get("run_metrics", {}))
+    benchmark_metrics = dict(state.get("performance", {}).get("benchmark_metrics", {}))
+    overall = dict(benchmark_metrics.get("overall", {}))
+    optimization_events = list(state.get("optimization_events", []))
+    validation_sharpe = 0.0
+    if optimization_events:
+        validation_sharpe = _safe_float(optimization_events[-1].get("objective_value", 0.0))
+    return {
+        "run_id": state.get("run_id", "unknown"),
+        "generated_at_utc": _utc_now(),
+        "dataset_window": {
+            "dataset_hash": dataset_metadata.get("dataset_hash"),
+            "snapshot_hash": dataset_metadata.get("snapshot_hash"),
+            "raw_data_hash": dataset_metadata.get("raw_data_hash"),
+            "timestamp_start": dataset_metadata.get("timestamp_start"),
+            "timestamp_end": dataset_metadata.get("timestamp_end"),
+            "timestamp_start_utc": dataset_metadata.get("timestamp_start_utc"),
+            "timestamp_end_utc": dataset_metadata.get("timestamp_end_utc"),
+        },
+        "metrics": {
+            "validation_sharpe": validation_sharpe,
+            "walk_forward_mean_sharpe": _safe_float(overall.get("mean_sharpe")),
+            "held_out_sharpe": _safe_float(run_metrics.get("sharpe")),
+            "max_drawdown": _safe_float(run_metrics.get("max_drawdown")),
+            "total_return": _safe_float(run_metrics.get("total_return")),
+            "transition_count": _safe_int(run_metrics.get("transition_count")),
+            "completed_trade_count": _safe_int(run_metrics.get("completed_trade_count")),
+        },
+        "thresholds": dict(state.get("strategy_params", {})),
+        "git_commit_hash": run_metadata.get("git_commit_hash"),
+        "config_hash": run_metadata.get("config_hash"),
+    }
+
+
+def _append_regression_ledger(artifact_root: Path, entry: dict[str, Any]) -> list[dict[str, Any]]:
+    ledger_path = artifact_root / "regression_ledger.json"
+    existing_rows: list[dict[str, Any]] = []
+    if ledger_path.exists():
+        try:
+            payload = json.loads(ledger_path.read_text(encoding="utf-8"))
+            if isinstance(payload, list):
+                existing_rows = [row for row in payload if isinstance(row, dict)]
+        except Exception:
+            existing_rows = []
+    existing_rows.append(entry)
+    _write_json(ledger_path, existing_rows, sort_keys=False)
+    return existing_rows
+
+
 def build_report_payload(state: AgentState) -> dict[str, Any]:
     config = dict(state.get("config", {}))
     reporting_cfg = dict(config.get("reporting", {}))
@@ -177,6 +256,17 @@ def build_report_payload(state: AgentState) -> dict[str, Any]:
     )
     for warning in readiness.get("warnings", []):
         data_quality_notes.append(f"Readiness warning: {warning}")
+    evidence = readiness.get("evidence_sufficiency", {})
+    if isinstance(evidence, dict):
+        data_quality_notes.append(
+            "Benchmark sufficiency artifact available: "
+            f"{bool(evidence.get('benchmark_sufficiency_artifact_available', False))}."
+        )
+        data_quality_notes.append(
+            "Regression history windows: "
+            f"{int(evidence.get('historical_window_count', 0))}/"
+            f"{int(evidence.get('minimum_historical_windows', 0))}."
+        )
 
     return {
         "metadata": {
@@ -358,6 +448,9 @@ def render_markdown_report(report: dict[str, Any]) -> str:
     engineering_validity = readiness.get("engineering_validity", {})
     if not isinstance(engineering_validity, dict):
         engineering_validity = {}
+    research_validity = readiness.get("research_validity", {})
+    if not isinstance(research_validity, dict):
+        research_validity = {}
     evidence_sufficiency = readiness.get("evidence_sufficiency", {})
     if not isinstance(evidence_sufficiency, dict):
         evidence_sufficiency = {}
@@ -366,6 +459,9 @@ def render_markdown_report(report: dict[str, Any]) -> str:
     lines.extend(["", "## Phase Gate", ""])
     lines.append(f"- Phase Gate Decision: {readiness.get('phase_gate_decision', 'unknown')}")
     lines.append(f"- Fine-Tuning Gate Open: {readiness.get('fine_tuning_gate_open', False)}")
+    lines.append(f"- Engineering Valid: {bool(engineering_validity.get('green', False))}")
+    lines.append(f"- Research Valid: {bool(research_validity.get('green', False))}")
+    lines.append(f"- Evidence Sufficient: {bool(evidence_sufficiency.get('green', False))}")
     lines.append(
         f"- Execution Semantics Consistent: {bool(engineering_validity.get('execution_semantics_consistent', False))}"
     )
@@ -377,6 +473,15 @@ def render_markdown_report(report: dict[str, Any]) -> str:
     )
     lines.append(
         f"- Walk-Forward Sufficient: {bool(evidence_sufficiency.get('walk_forward_sufficient', False))}"
+    )
+    lines.append(
+        "- Benchmark Sufficiency Artifact Available: "
+        f"{bool(evidence_sufficiency.get('benchmark_sufficiency_artifact_available', False))}"
+    )
+    lines.append(
+        "- Historical Window Count: "
+        f"{int(evidence_sufficiency.get('historical_window_count', 0))} "
+        f"(minimum {int(evidence_sufficiency.get('minimum_historical_windows', 0))})"
     )
     if isinstance(hard_blockers, list) and hard_blockers:
         for blocker in hard_blockers:
@@ -448,6 +553,7 @@ def _stage_artifact_dir_non_blocking(project_root: Path, artifact_dir: Path, *, 
 def persist_run_artifacts(project_root: Path, state: AgentState) -> Path:
     artifact_dir = project_root / str(state.get("artifact_dir", "artifacts/unknown-run"))
     artifact_dir.mkdir(parents=True, exist_ok=True)
+    artifact_root = artifact_dir.parent
 
     report_payload = build_report_payload(state)
     report_transition_count = _safe_int(report_payload.get("headline_kpis", {}).get("transition_count"))
@@ -523,7 +629,13 @@ def persist_run_artifacts(project_root: Path, state: AgentState) -> Path:
     _write_json(artifact_dir / "completed_trades.json", list(state.get("completed_trades", [])), sort_keys=False)
     _write_json(artifact_dir / "equity_curve.json", list(state.get("equity_curve", [])), sort_keys=False)
     _write_json(artifact_dir / "returns.json", list(state.get("returns", [])), sort_keys=False)
-    _write_json(artifact_dir / "benchmark_metrics.json", dict(state.get("performance", {}).get("benchmark_metrics", {})), sort_keys=False)
+    benchmark_metrics_payload = dict(state.get("performance", {}).get("benchmark_metrics", {}))
+    _write_json(artifact_dir / "benchmark_metrics.json", benchmark_metrics_payload, sort_keys=False)
+    _write_json(
+        artifact_dir / "benchmark_sufficiency.json",
+        _build_benchmark_sufficiency_payload(benchmark_metrics_payload),
+        sort_keys=False,
+    )
     _write_json(artifact_dir / "run_metrics.json", dict(state.get("performance", {}).get("run_metrics", {})), sort_keys=False)
     _write_json(artifact_dir / "readiness.json", dict(state.get("readiness", {})), sort_keys=False)
     _write_json(artifact_dir / "event_counts.json", report_payload.get("event_counts", {}))
@@ -533,6 +645,12 @@ def persist_run_artifacts(project_root: Path, state: AgentState) -> Path:
     decision_log = list(state.get("decision_log", []))
     _write_jsonl(artifact_dir / "decision_log.jsonl", decision_log)
     _write_json(artifact_dir / "decision_log.json", decision_log, sort_keys=False)
+
+    regression_entry = _build_regression_ledger_entry(state)
+    _write_json(artifact_dir / "regression_ledger_entry.json", regression_entry, sort_keys=False)
+    if not state.get("error_info"):
+        ledger_snapshot = _append_regression_ledger(artifact_root, regression_entry)
+        _write_json(artifact_dir / "regression_ledger_snapshot.json", ledger_snapshot, sort_keys=False)
 
     if persist_csv_exports:
         _write_csv_records(artifact_dir / "trades.csv", list(state.get("trades", [])))
