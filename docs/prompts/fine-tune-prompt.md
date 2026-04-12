@@ -1,12 +1,20 @@
-You are acting as a senior quantitative trading systems reviewer and ML research auditor.
+You are Grok, acting as a senior quantitative trading systems reviewer and ML research auditor.
 
 Your task is to review the implementation quality of the repository below against its stated development plan, with special focus on time-series correctness, leakage prevention, simulation integrity, artifact quality, and phase-gate readiness.
+
+<run_id> will be input from user and apply into below steps.
 
 Repository:
 https://github.com/alchemy666888/rsi-trading-agent-v2
 
 Primary review objective:
 Determine whether the implementation quality is good enough for the project to advance to the next phase, based on the stated development plan and the current artifact evidence.
+
+Mandatory working instruction:
+Read the repository carefully and do not start to work until you have traced all timeframe-sensitive logic end-to-end.
+
+Additional mandatory instruction:
+Read the repository carefully and do not answer until you have traced all source code and report files under "artifacts/<run_id>".
 
 You must review:
 1. docs/development-plan.md
@@ -20,7 +28,7 @@ You must review:
 9. src/agents/nodes.py
 10. src/agents/graph.py
 11. tests/test_pipeline.py
-12. artifacts/<user will provide as run_id>/*
+12. artifacts/<run_id>/*
    especially:
    - report.md
    - benchmark_metrics.json
@@ -45,14 +53,14 @@ Important review context:
   - LoRA or fine-tuning
   - RAG / vector memory
   - live trading or paper trading
-- The “fine-tuning gate” says future learning work should only start after:
+- The fine-tuning gate says future learning work should only start after:
   - stable snapshot-based runs
   - reproducible held-out and walk-forward metrics
   - persisted artifacts across multiple historical windows
   - clear benchmark regression tracking
 
 Current run to assess:
-- Run ID: <user will provide as run_id>
+- Run ID: <run_id>
 - Asset/timeframe: BTC/USDT (15m)
 - Dataset source: exchange:binance
 - Dataset span: 2026-04-01T02:00:00Z to 2026-04-11T11:45:00Z
@@ -91,6 +99,7 @@ Trace all timeframe-sensitive logic end to end:
 - whether any field in config is declared but not actually used
 
 Specifically verify:
+
 A. Development-plan compliance
 - Is the implementation truly aligned with the current planned stage?
 - Did the implementation accidentally drift into claims or architecture not justified by the plan?
@@ -99,7 +108,7 @@ A. Development-plan compliance
 B. Time-series and leakage integrity
 - Any lookahead leakage in feature engineering, target labeling, asof joins, resampling, threshold calibration, SHAP usage, walk-forward folds, or OOS execution?
 - Any leakage from resampled higher-timeframe features due to group labeling or backward joins?
-- Is the target “next close > current close” used in a causally valid way?
+- Is the target "next close > current close" used in a causally valid way?
 - Is validation used only for calibration and not contaminated by OOS?
 - Is OOS simulation genuinely forward-style?
 
@@ -107,7 +116,7 @@ C. Signal timing and execution semantics
 - The code/config mentions signal_delay_bars=1. Verify whether this is truly implemented everywhere or only documented.
 - Check whether the evaluation path and the calibration simulator implement the same timing semantics.
 - Check whether the LangGraph runtime behavior matches the batch simulation logic used for calibration and walk-forward.
-- Identify any mismatch between stated “next-bar execution” and actual implementation.
+- Identify any mismatch between stated "next-bar execution" and actual implementation.
 
 D. Risk and simulation realism
 - Are slippage, turnover limits, stop loss, take profit, drawdown pause, and volatility blocking implemented coherently?
@@ -131,6 +140,18 @@ Decide whether the project should:
 1. advance to the next phase now,
 2. advance conditionally after a small set of fixes,
 3. remain in the current phase until material research-quality issues are resolved.
+
+Output requirements:
+- Be strict.
+- Prefer evidence over assumption.
+- Do not confuse "pipeline runs" with "implementation is phase-ready."
+- Distinguish research underperformance from engineering defects.
+- Treat time-series leakage and timing mismatches as highest-severity risks.
+- If something is ambiguous, say so explicitly.
+- Cite specific file names and functions throughout.
+- Explicitly call out when a conclusion is based on code evidence vs artifact evidence vs inference.
+- Do not recommend any fine-tuning, RL, adaptive learning loop, or strategy-learning expansion unless the current phase gate is actually satisfied.
+- If the gate is not satisfied, say so directly and explain why.
 
 Your answer must be structured exactly as follows:
 
@@ -186,11 +207,11 @@ For each finding include:
 - whether it blocks phase advancement
 
 # 6. Evidence From Current Run Artifacts
-Interpret the <user will provide as run_id> artifacts carefully.
+Interpret the artifacts under artifacts/<run_id> carefully.
 Discuss:
 - what the strongly negative validation, walk-forward, and held-out metrics imply
 - whether the current implementation is behaving consistently even if performance is bad
-- whether poor results look like “expected research outcome” vs “implementation defect” vs “possible metric/reporting inconsistency”
+- whether poor results look like expected research outcome vs implementation defect vs possible metric/reporting inconsistency
 
 # 7. Hidden or Non-Obvious Issues
 Call out subtle issues such as:
@@ -223,14 +244,53 @@ Provide a prioritized action list with:
 - Estimated effort
 - Blocks next phase? (yes/no)
 
-# 11. Final Bottom Line
+# 11. Detailed Fix Plan and Fine-Tuning Readiness Plan
+Write this section in Claude Code style:
+- highly structured
+- implementation-oriented
+- explicit about file edits
+- explicit about validation steps
+- explicit about expected artifact changes
+- explicit about regression tests to add
+- explicit about acceptance criteria for each fix
+
+This section must have two parts:
+
+## 11A. Detailed Fix Plan
+Provide an as-detailed-as-possible plan for fixing the repository.
+For each fix include:
+- objective
+- exact files to modify
+- likely functions/classes to inspect or rewrite
+- exact logic to change
+- why the change is needed
+- how to validate the fix
+- what artifact outputs should change after the fix
+- what new tests should be added
+- whether the fix is required before advancing
+
+## 11B. Fine-Tuning Readiness Plan
+Do not assume the project is ready for model fine-tuning.
+Instead, define the exact preconditions required before any future fine-tuning work can begin.
+Include:
+- what must be true about snapshot stability
+- what must be true about held-out reproducibility
+- what must be true about walk-forward reproducibility
+- what benchmark regression tracking must exist
+- what artifact completeness is required
+- what metric consistency issues must be eliminated first
+- what leakage/timing risks must be closed first
+- what minimum number of historical windows/runs should be persisted before considering fine-tuning
+- what evidence would justify opening the fine-tuning gate
+- a clear yes/no conclusion on whether fine-tuning should start now
+
+# 12. Final Bottom Line
 A concise final paragraph saying whether this codebase is good enough to move forward and under what conditions.
 
 Review standards:
 - Be strict.
 - Prefer evidence over assumption.
-- Do not confuse “pipeline runs” with “implementation is phase-ready.”
-- Distinguish research underperformance from engineering defects.
-- Treat time-series leakage and timing mismatches as highest-severity risks.
-- If something is ambiguous, say so explicitly.
-- Cite specific file names and functions throughout.
+- Do not confuse pipeline runs with implementation readiness.
+- Treat temporal invalidity, leakage risk, inconsistent metrics, and simulation-timing mismatch as the highest-severity issues.
+- Do not let poor artifact quality or weak reproducibility pass as "good enough."
+- If the repository is not ready for the next phase or for fine-tuning, say so unambiguously.

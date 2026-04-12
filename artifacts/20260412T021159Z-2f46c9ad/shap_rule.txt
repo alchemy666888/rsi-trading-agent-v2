@@ -1,0 +1,1 @@
+If ret_1_lag_11 is elevated (current=-0.0021), the model estimate for long probability typically increases.

@@ -89,6 +89,7 @@ def simulate_policy(
     slippage_bps: float,
     timestamp: np.ndarray | None = None,
     signal_delay_bars: int = 1,
+    funding_rate_per_8h: float = 0.0,
     timeframe: str = "15m",
 ) -> dict[str, Any]:
     if close.shape[0] < 2:
@@ -114,6 +115,9 @@ def simulate_policy(
     take_profit_pct = float(risk_cfg.get("take_profit_pct", 0.0))
     block_high_volatility = bool(risk_cfg.get("block_high_volatility", False))
     delay_bars = max(0, int(signal_delay_bars))
+    funding_rate = max(0.0, float(funding_rate_per_8h))
+    tf_minutes = TIMEFRAME_MINUTES.get(timeframe, 15)
+    funding_interval_bars = max(1, int(8 * 60 / tf_minutes))
     scheduled_actions: dict[int, tuple[int, int, int]] = {}
 
     for idx in range(len(close) - 1):
@@ -148,6 +152,8 @@ def simulate_policy(
         next_close = float(close[idx + 1])
         market_return = (next_close - current_close) / current_close
         strategy_return = (target_position * market_return) - transaction_cost
+        if funding_rate > 0.0 and (idx + 1) % funding_interval_bars == 0 and position != 0:
+            strategy_return -= abs(position) * funding_rate
         equity *= 1.0 + strategy_return
         returns.append(strategy_return)
         equity_curve.append(equity)
@@ -194,6 +200,7 @@ def calibrate_thresholds(
     initial_equity = float(sim_cfg["initial_equity"])
     slippage_bps = float(sim_cfg["slippage_bps"])
     signal_delay_bars = int(sim_cfg.get("signal_delay_bars", 1))
+    funding_rate_per_8h = float(sim_cfg.get("funding_rate_per_8h", 0.0))
 
     def objective(trial: optuna.Trial) -> float:
         params = {
@@ -212,6 +219,7 @@ def calibrate_thresholds(
             slippage_bps,
             timestamps,
             signal_delay_bars=signal_delay_bars,
+            funding_rate_per_8h=funding_rate_per_8h,
             timeframe=timeframe,
         )
         return float(result["metrics"]["sharpe"])
@@ -285,6 +293,7 @@ def run_walk_forward_backtest(
     initial_equity = float(sim_cfg["initial_equity"])
     slippage_bps = float(sim_cfg["slippage_bps"])
     signal_delay_bars = int(sim_cfg.get("signal_delay_bars", 1))
+    funding_rate_per_8h = float(sim_cfg.get("funding_rate_per_8h", 0.0))
 
     def run_mode(mode: str) -> dict[str, Any]:
         folds = build_walk_forward_folds(config, split_metadata, data.height, mode)
@@ -318,6 +327,7 @@ def run_walk_forward_backtest(
                 slippage_bps,
                 test_df["timestamp"].to_numpy(),
                 signal_delay_bars=signal_delay_bars,
+                funding_rate_per_8h=funding_rate_per_8h,
                 timeframe=timeframe,
             )
             fold_results.append(

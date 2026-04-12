@@ -1,0 +1,198 @@
+{
+  "benchmark_comparison": {
+    "held_out_vs_walk_forward": {
+      "delta_sharpe": -27.41384621639052,
+      "delta_total_return": -0.05156815351402594,
+      "held_out_sharpe": -42.75115712952399,
+      "held_out_total_return": -0.07266196952943083,
+      "walk_forward_mean_sharpe": -15.337310913133468,
+      "walk_forward_mean_total_return": -0.021093816015404887
+    },
+    "overfit_warnings": [
+      "Held-out and walk-forward Sharpe are both negative; strategy is not yet investment-ready."
+    ]
+  },
+  "calibration_summary": {
+    "best_validation_score": -10.436936867622716,
+    "objective": "validation_sharpe",
+    "optimization_events": [
+      {
+        "affects_future_oos_only": true,
+        "best_params": {
+          "long_threshold": 0.670927392935996,
+          "short_threshold": 0.43128076768573737
+        },
+        "objective_name": "validation_sharpe",
+        "objective_value": -10.436936867622716,
+        "split": "validation"
+      }
+    ],
+    "optimization_trials": 1,
+    "strategy_params": {
+      "long_threshold": 0.670927392935996,
+      "short_threshold": 0.43128076768573737
+    }
+  },
+  "data_quality": {
+    "dataset_metadata": {
+      "columns": 1027,
+      "dataset_hash": "94301d7d1a463181",
+      "missing_values_by_column": {},
+      "missing_values_total": 0,
+      "rows": 1000,
+      "source_mode": "exchange",
+      "source_ref": "exchange:binance",
+      "timestamp_end": 1775959200000,
+      "timestamp_end_utc": "2026-04-12T02:00:00+00:00",
+      "timestamp_start": 1775060100000,
+      "timestamp_start_utc": "2026-04-01T16:15:00+00:00"
+    },
+    "notes": [
+      "Missing values filled during feature prep: 0.",
+      "Feature columns available for model: 1024.",
+      "Assumed next-bar execution with slippage_bps=5.00.",
+      "Readiness warning: Validation Sharpe, walk-forward mean Sharpe, and held-out Sharpe are all negative."
+    ],
+    "readiness": {
+      "held_out_sharpe": -42.75115712952399,
+      "validation_sharpe": -10.436936867622716,
+      "walk_forward_mean_sharpe": -15.337310913133468,
+      "warnings": [
+        "Validation Sharpe, walk-forward mean Sharpe, and held-out Sharpe are all negative."
+      ]
+    },
+    "split_metadata": {
+      "max_feature_lag": 16,
+      "oos_end": 999,
+      "oos_start": 817,
+      "purge_bars": 5,
+      "required_embargo_gap": 17,
+      "train_end": 600,
+      "train_start": 0,
+      "validation_end": 800,
+      "validation_start": 600
+    }
+  },
+  "equity_diagnostics": {
+    "annualized_volatility": 1.3102939281971722,
+    "bars": 182,
+    "drawdown_episode_count": 1,
+    "drawdown_episodes": [
+      {
+        "duration_bars": 180,
+        "end_idx": null,
+        "max_drawdown": 0.07266196952943083,
+        "start_idx": 2,
+        "trough_idx": 182
+      }
+    ],
+    "max_drawdown_episode": {
+      "duration_bars": 180,
+      "end_idx": null,
+      "max_drawdown": 0.07266196952943083,
+      "start_idx": 2,
+      "trough_idx": 182
+    }
+  },
+  "event_counts": {
+    "artifact_persistence_started": 1,
+    "config_loaded": 1,
+    "dataset_loaded": 1,
+    "decision_made": 182,
+    "feature_engineering_completed": 1,
+    "model_training_completed": 1,
+    "model_training_started": 1,
+    "oos_simulation_completed": 1,
+    "oos_simulation_started": 1,
+    "optimization_event_recorded": 1,
+    "optimize_cycle": 182,
+    "prediction_generated": 182,
+    "readiness_warning": 1,
+    "risk_evaluated": 182,
+    "run_started": 1,
+    "step_evaluated": 182,
+    "threshold_calibration_completed": 1,
+    "threshold_calibration_started": 1,
+    "trade_closed": 41,
+    "trade_opened": 41,
+    "walk_forward_completed": 1,
+    "walk_forward_started": 1
+  },
+  "failure": null,
+  "headline_kpis": {
+    "avg_trade_return": -0.0008241553748038721,
+    "exposure_stats": {
+      "flat_exposure_pct": 0.37362637362637363,
+      "long_exposure_pct": 0.08791208791208792,
+      "short_exposure_pct": 0.5384615384615384,
+      "turnover": 0.45054945054945056
+    },
+    "max_drawdown": 0.07266196952943083,
+    "profit_factor": 0.4708808325750985,
+    "sharpe": -42.75115712952399,
+    "total_return": -0.07266196952943083,
+    "trade_count": 82,
+    "turnover": 0.45054945054945056,
+    "win_rate": 0.43902439024390244
+  },
+  "metadata": {
+    "config_hash": "11da6aa8a7f7a02adb79ac62d7affdae985600885b394dc7377f201fdbb8decd",
+    "dataset_mode": "exchange",
+    "dataset_source": "exchange:binance",
+    "dataset_span_end": "2026-04-12T02:00:00+00:00",
+    "dataset_span_start": "2026-04-01T16:15:00+00:00",
+    "generated_at_utc": "2026-04-12T02:11:03.088933+00:00",
+    "git_commit_hash": "3634754e48891968590a6c869fa3fab301da2433",
+    "report_detail_level": "full",
+    "run_id": "20260412T021054Z-9ec7d71a",
+    "split_counts": {
+      "oos_bars": 182,
+      "total_bars": 1000,
+      "train_bars": 600,
+      "validation_bars": 200
+    },
+    "symbol": "BTC/USDT",
+    "timeframe": "15m"
+  },
+  "risk_diagnostics": {
+    "blocked_trades": 0,
+    "drawdown_pause_activated_count": 0,
+    "drawdown_pause_cleared_count": 0,
+    "max_consecutive_losses": 6,
+    "pause_durations_seconds": [],
+    "stop_loss_triggered_count": 0,
+    "take_profit_triggered_count": 0
+  },
+  "trade_diagnostics": {
+    "average_hold_bars": 2.7804878048780486,
+    "best_trade": {
+      "close_cycle": 45,
+      "close_reason": [],
+      "close_timestamp": 1775836800000,
+      "direction": -1,
+      "entry_price": 73026.4,
+      "exit_price": 72745.81,
+      "hold_bars": 2,
+      "open_cycle": 43,
+      "open_timestamp": 1775834100000,
+      "pnl_pct": 0.0038571293659386274
+    },
+    "long_vs_short_breakdown": {
+      "long_trades": 11,
+      "short_trades": 30
+    },
+    "longest_hold_bars": 21,
+    "worst_trade": {
+      "close_cycle": 182,
+      "close_reason": [],
+      "close_timestamp": 1775959200000,
+      "direction": 1,
+      "entry_price": 73017.61,
+      "exit_price": 71643.69,
+      "hold_bars": 2,
+      "open_cycle": 180,
+      "open_timestamp": 1775957400000,
+      "pnl_pct": -0.018816282811776497
+    }
+  }
+}

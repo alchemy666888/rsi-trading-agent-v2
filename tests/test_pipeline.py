@@ -17,10 +17,10 @@ if str(SRC_ROOT) not in sys.path:
 
 from agents.artifacts import persist_run_artifacts
 from agents.data import compute_split_metadata
-from agents.evaluation import build_walk_forward_folds, calibrate_thresholds, simulate_policy
+from agents.evaluation import build_walk_forward_folds, calibrate_thresholds, choose_position, simulate_policy
 from agents.features import build_features
 from agents.metrics_utils import compare_benchmark_metrics
-from agents.nodes import data_node, runtime_config_node
+from agents.nodes import data_node, decision_node, evaluate_node, runtime_config_node
 from agents.risk import evaluate_risk
 from run_mvp import evaluate_readiness
 
@@ -35,6 +35,7 @@ def build_test_config() -> dict:
         "simulation": {
             "initial_equity": 10000.0,
             "slippage_bps": 5,
+            "funding_rate_per_8h": 0.0,
             "signal_delay_bars": 1,
             "optuna_trials": 5,
             "trade_history_limit": 1000,
@@ -64,6 +65,7 @@ def build_test_config() -> dict:
             "report_detail_level": "full",
             "write_report_json": True,
             "persist_csv_exports": True,
+            "auto_stage_artifacts": False,
             "decision_log_enabled": True,
             "decision_feature_count": 12,
         },
@@ -203,6 +205,151 @@ class PipelineTests(unittest.TestCase):
                 1,
             )
         self.assertNotAlmostEqual(sum(delay_0["returns"]), sum(delay_1["returns"]), places=9)
+
+    def test_signal_delay_roundtrip(self) -> None:
+        close = np.array([100.0, 102.0, 101.0, 103.0, 102.0, 104.0], dtype=float)
+        probs = np.array([0.9, 0.1, 0.9, 0.1, 0.9, 0.1], dtype=float)
+        volatility_regime = np.zeros_like(close, dtype=int)
+        timestamps = np.array([10, 20, 30, 40, 50, 60], dtype=int)
+        strategy_params = {"long_threshold": 0.6, "short_threshold": 0.4}
+        risk_cfg = {
+            "max_abs_position": 1,
+            "max_turnover_per_bar": 2,
+            "block_high_volatility": False,
+            "stop_loss_pct": 0.0,
+            "take_profit_pct": 0.0,
+        }
+        simulation = simulate_policy(
+            close=close,
+            probs=probs,
+            volatility_regime=volatility_regime,
+            strategy_params=strategy_params,
+            risk_cfg=risk_cfg,
+            initial_equity=10000.0,
+            slippage_bps=0.0,
+            timestamp=timestamps,
+            signal_delay_bars=1,
+            funding_rate_per_8h=0.0,
+            timeframe="15m",
+        )
+
+        runtime_cfg = build_test_config()
+        runtime_cfg["simulation"]["slippage_bps"] = 0.0
+        runtime_cfg["simulation"]["signal_delay_bars"] = 1
+        runtime_cfg["risk"]["max_turnover_per_bar"] = 2
+        runtime_cfg["risk"]["block_high_volatility"] = False
+        runtime_cfg["risk"]["stop_loss_pct"] = 0.0
+        runtime_cfg["risk"]["take_profit_pct"] = 0.0
+        runtime_state = {
+            "config": runtime_cfg,
+            "historical_data": pl.DataFrame({"timestamp": timestamps, "close": close}),
+            "split_metadata": {"oos_end": len(close) - 1},
+            "cursor": 0,
+            "done": False,
+            "paused": False,
+            "position": 0,
+            "target_position": 0,
+            "proposed_position": 0,
+            "pending_signals": [],
+            "applied_signal": None,
+            "signal_delay_bars_runtime": 1,
+            "entry_price": None,
+            "entry_cycle": None,
+            "entry_timestamp": None,
+            "last_action": "HOLD",
+            "strategy_params": strategy_params,
+            "risk_status": {
+                "paused": False,
+                "reasons": [],
+                "stop_triggered": False,
+                "take_profit_triggered": False,
+                "blocked_high_volatility": False,
+            },
+            "current_row": {"timestamp": int(timestamps[0]), "close": float(close[0]), "rsi_14": 50.0},
+            "prediction": {
+                "prob_up": 0.5,
+                "regime": "normal",
+                "signal_timestamp": int(timestamps[0]),
+                "execution_timestamp": int(timestamps[1]),
+                "source_model": "unit_test",
+            },
+            "returns": [],
+            "equity_curve": [],
+            "trades": [],
+            "trade_history_buffer": [],
+            "completed_trades": [],
+            "decision_log": [],
+            "equity": 10000.0,
+            "performance": {"run_metrics": {}, "benchmark_metrics": {}},
+        }
+
+        for idx in range(len(close) - 1):
+            runtime_state["cursor"] = idx
+            runtime_state["current_row"] = {"timestamp": int(timestamps[idx]), "close": float(close[idx]), "rsi_14": 50.0}
+            runtime_state["target_position"] = choose_position(
+                float(probs[idx]),
+                strategy_params["long_threshold"],
+                strategy_params["short_threshold"],
+            )
+            execution_idx = min(idx + runtime_state["signal_delay_bars_runtime"] + 1, len(close) - 1)
+            runtime_state["prediction"] = {
+                "prob_up": float(probs[idx]),
+                "regime": "normal",
+                "signal_timestamp": int(timestamps[idx]),
+                "execution_timestamp": int(timestamps[execution_idx]),
+                "source_model": "unit_test",
+            }
+            runtime_state["risk_status"] = {
+                "paused": False,
+                "reasons": [],
+                "stop_triggered": False,
+                "take_profit_triggered": False,
+                "blocked_high_volatility": False,
+            }
+            runtime_state.update(decision_node(runtime_state))
+            runtime_state.update(evaluate_node(runtime_state))
+            if runtime_state.get("done", False):
+                break
+
+        self.assertEqual(len(simulation["returns"]), len(runtime_state["returns"]))
+        self.assertTrue(np.allclose(simulation["returns"], runtime_state["returns"], atol=1e-12))
+        self.assertTrue(np.allclose(simulation["equity_curve"], runtime_state["equity_curve"], atol=1e-9))
+        self.assertEqual(len(simulation["trades"]), len(runtime_state["trades"]))
+        self.assertEqual(
+            [int(trade["execution_timestamp"]) for trade in simulation["trades"]],
+            [int(trade["execution_timestamp"]) for trade in runtime_state["trades"]],
+        )
+        self.assertEqual(
+            [int(trade["signal_timestamp"]) for trade in simulation["trades"]],
+            [int(trade["signal_timestamp"]) for trade in runtime_state["trades"]],
+        )
+
+    def test_simulate_policy_applies_funding_cost(self) -> None:
+        close = np.array([100.0] * 10, dtype=float)
+        probs = np.array([0.9] * 10, dtype=float)
+        volatility_regime = np.zeros(10, dtype=int)
+        result = simulate_policy(
+            close=close,
+            probs=probs,
+            volatility_regime=volatility_regime,
+            strategy_params={"long_threshold": 0.6, "short_threshold": 0.4},
+            risk_cfg={
+                "max_abs_position": 1,
+                "max_turnover_per_bar": 1,
+                "block_high_volatility": False,
+                "stop_loss_pct": 0.0,
+                "take_profit_pct": 0.0,
+            },
+            initial_equity=10000.0,
+            slippage_bps=0.0,
+            timestamp=np.arange(1, 11, dtype=int),
+            signal_delay_bars=0,
+            funding_rate_per_8h=0.01,
+            timeframe="1h",
+        )
+        self.assertEqual(len(result["returns"]), 9)
+        self.assertLess(result["returns"][7], 0.0)
+        self.assertAlmostEqual(sum(result["returns"]), -0.01, places=9)
 
     def test_drawdown_pause_and_high_vol_block(self) -> None:
         state = {

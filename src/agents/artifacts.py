@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -357,6 +358,27 @@ def _write_csv_records(path: Path, records: list[dict[str, Any]]) -> None:
     pl.DataFrame(normalized_records).write_csv(path)
 
 
+def _stage_artifact_dir_non_blocking(project_root: Path, artifact_dir: Path, *, enabled: bool) -> None:
+    if not enabled:
+        return
+    if not (project_root / ".git").exists():
+        return
+    try:
+        rel_artifact_dir = artifact_dir.relative_to(project_root)
+    except Exception:
+        return
+    try:
+        subprocess.run(
+            ["git", "add", str(rel_artifact_dir)],
+            cwd=project_root,
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        return
+
+
 def persist_run_artifacts(project_root: Path, state: AgentState) -> Path:
     artifact_dir = project_root / str(state.get("artifact_dir", "artifacts/unknown-run"))
     artifact_dir.mkdir(parents=True, exist_ok=True)
@@ -384,6 +406,7 @@ def persist_run_artifacts(project_root: Path, state: AgentState) -> Path:
     reporting_cfg = dict(state.get("config", {}).get("reporting", {}))
     write_report_json = bool(reporting_cfg.get("write_report_json", True))
     persist_csv_exports = bool(reporting_cfg.get("persist_csv_exports", True))
+    auto_stage_artifacts = bool(reporting_cfg.get("auto_stage_artifacts", False))
 
     if write_report_json:
         _write_json(artifact_dir / "report.json", report_payload)
@@ -463,5 +486,11 @@ def persist_run_artifacts(project_root: Path, state: AgentState) -> Path:
             dict(state.get("last_state_snapshot", build_last_state_snapshot(state))),
             sort_keys=False,
         )
+
+    _stage_artifact_dir_non_blocking(
+        project_root,
+        artifact_dir,
+        enabled=auto_stage_artifacts,
+    )
 
     return artifact_dir

@@ -1,0 +1,12 @@
+[
+  {
+    "affects_future_oos_only": true,
+    "best_params": {
+      "long_threshold": 0.670503734361216,
+      "short_threshold": 0.2520085319161853
+    },
+    "objective_name": "validation_sharpe",
+    "objective_value": -10.722061355432801,
+    "split": "validation"
+  }
+]

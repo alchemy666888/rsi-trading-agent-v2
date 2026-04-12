@@ -67,6 +67,28 @@ def _build_error_info(exc: Exception) -> dict[str, Any]:
     }
 
 
+def _auto_stage_run_artifacts(project_root: Path, artifact_path: Path, config: dict[str, Any]) -> None:
+    reporting_cfg = dict(config.get("reporting", {}))
+    if not bool(reporting_cfg.get("auto_stage_artifacts", False)):
+        return
+    if not (project_root / ".git").exists():
+        return
+    try:
+        rel_artifact_path = artifact_path.relative_to(project_root)
+    except Exception:
+        rel_artifact_path = artifact_path
+    try:
+        subprocess.run(
+            ["git", "add", str(rel_artifact_path)],
+            cwd=project_root,
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        return
+
+
 def evaluate_readiness(state: AgentState) -> dict[str, Any]:
     optimization_events = list(state.get("optimization_events", []))
     validation_sharpe = 0.0
@@ -192,6 +214,7 @@ def main() -> None:
             message="Run completed successfully.",
             run_metrics=final_state.get("performance", {}).get("run_metrics", {}),
         )
+        _auto_stage_run_artifacts(PROJECT_ROOT, persisted_path, config)
         logger.info("Research prototype run complete. Run ID=%s", run_id)
         logger.info("Artifact bundle written to %s", persisted_path)
         logger.info("Held-out Sharpe=%.4f", float(final_state["performance"]["run_metrics"]["sharpe"]))
@@ -223,6 +246,7 @@ def main() -> None:
                 message="Partial artifact persistence completed.",
                 artifact_dir=str(persisted_path),
             )
+            _auto_stage_run_artifacts(PROJECT_ROOT, persisted_path, config)
             logger.error("Run failed. Partial artifacts written to %s", persisted_path)
         except Exception:
             logger.exception("Failed to persist partial artifact bundle after run failure.")

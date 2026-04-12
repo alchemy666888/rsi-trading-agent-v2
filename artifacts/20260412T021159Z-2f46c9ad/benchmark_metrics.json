@@ -1,0 +1,78 @@
+{
+  "settings": {
+    "train_bars": 500,
+    "validation_bars": 150,
+    "test_bars": 120,
+    "step_bars": 80,
+    "purge_bars": 5,
+    "signal_delay_bars": 1
+  },
+  "expanding": {
+    "folds": [
+      {
+        "fold": 0,
+        "train_start": 0,
+        "train_end": 500,
+        "validation_start": 500,
+        "validation_end": 650,
+        "test_start": 655,
+        "test_end": 775,
+        "purge_bars": 5,
+        "long_threshold": 0.5210040464291366,
+        "short_threshold": 0.25457234053259187,
+        "optimization_meta": {
+          "split": "validation",
+          "objective_name": "validation_sharpe",
+          "objective_value": -26.387213787930346,
+          "affects_future_oos_only": true
+        },
+        "sharpe": -9.812005074390843,
+        "max_drawdown": 0.03080851163191267,
+        "win_rate": 0.31092436974789917,
+        "total_return": -0.0132328898115055,
+        "trade_count": 70
+      }
+    ],
+    "mean_sharpe": -9.812005074390843,
+    "mean_max_drawdown": 0.03080851163191267,
+    "mean_total_return": -0.0132328898115055,
+    "mean_win_rate": 0.31092436974789917
+  },
+  "rolling": {
+    "folds": [
+      {
+        "fold": 0,
+        "train_start": 0,
+        "train_end": 500,
+        "validation_start": 500,
+        "validation_end": 650,
+        "test_start": 655,
+        "test_end": 775,
+        "purge_bars": 5,
+        "long_threshold": 0.579371562683965,
+        "short_threshold": 0.26256631439987865,
+        "optimization_meta": {
+          "split": "validation",
+          "objective_name": "validation_sharpe",
+          "objective_value": -28.07935282281871,
+          "affects_future_oos_only": true
+        },
+        "sharpe": -22.375245191713514,
+        "max_drawdown": 0.035795899715038715,
+        "win_rate": 0.29411764705882354,
+        "total_return": -0.03096188252190135,
+        "trade_count": 74
+      }
+    ],
+    "mean_sharpe": -22.375245191713514,
+    "mean_max_drawdown": 0.035795899715038715,
+    "mean_total_return": -0.03096188252190135,
+    "mean_win_rate": 0.29411764705882354
+  },
+  "overall": {
+    "mean_sharpe": -16.09362513305218,
+    "mean_max_drawdown": 0.03330220567347569,
+    "mean_total_return": -0.022097386166703425,
+    "mean_win_rate": 0.3025210084033614
+  }
+}
