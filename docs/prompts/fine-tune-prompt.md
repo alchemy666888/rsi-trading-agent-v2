@@ -20,7 +20,7 @@ You must review:
 9. src/agents/nodes.py
 10. src/agents/graph.py
 11. tests/test_pipeline.py
-12. artifacts/20260411T114539Z-e46ea8e5/*
+12. artifacts/<user will provide as run_id>/*
    especially:
    - report.md
    - benchmark_metrics.json
@@ -52,7 +52,7 @@ Important review context:
   - clear benchmark regression tracking
 
 Current run to assess:
-- Run ID: 20260411T114539Z-e46ea8e5
+- Run ID: <user will provide as run_id>
 - Asset/timeframe: BTC/USDT (15m)
 - Dataset source: exchange:binance
 - Dataset span: 2026-04-01T02:00:00Z to 2026-04-11T11:45:00Z
@@ -186,7 +186,7 @@ For each finding include:
 - whether it blocks phase advancement
 
 # 6. Evidence From Current Run Artifacts
-Interpret the 20260411T114539Z-e46ea8e5 artifacts carefully.
+Interpret the <user will provide as run_id> artifacts carefully.
 Discuss:
 - what the strongly negative validation, walk-forward, and held-out metrics imply
 - whether the current implementation is behaving consistently even if performance is bad
