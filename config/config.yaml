@@ -6,6 +6,11 @@ asset:
 
 dataset:
   source_mode: "snapshot"
+  # Optional deterministic row slicing (exclusive end) for
+  # multi-window regression/readiness runs.
+  # row_slice:
+  #   start: 0
+  #   end: 2000
 
 snapshot:
   path: "snapshots/btcusdt_15m.parquet"

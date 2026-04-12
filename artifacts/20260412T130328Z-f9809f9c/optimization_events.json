@@ -1,0 +1,27 @@
+[
+  {
+    "affects_future_oos_only": true,
+    "best_params": {
+      "long_threshold": 0.7468698680429599,
+      "short_threshold": 0.47900372015575876
+    },
+    "diagnostics": {
+      "activity_penalty": 0.0,
+      "concentration_penalty": 0.0,
+      "degenerate_regime": false,
+      "guard_enabled": true,
+      "long_exposure_pct": 0.12709030100334448,
+      "max_one_side_exposure": 0.95,
+      "min_transition_count": 12,
+      "penalty_total": 0.0,
+      "raw_sharpe": -48.76076627101409,
+      "score": -48.76076627101409,
+      "short_exposure_pct": 0.5886287625418061,
+      "transition_count": 209
+    },
+    "objective_name": "validation_sharpe_activity_adjusted",
+    "objective_value": -48.76076627101409,
+    "objective_value_adjusted": -48.76076627101409,
+    "split": "validation"
+  }
+]

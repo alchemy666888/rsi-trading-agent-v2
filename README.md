@@ -171,6 +171,7 @@ Controls where historical data comes from:
 - `dataset.source_mode = "exchange"` loads fresh OHLCV through `ccxt`
 - `dataset.source_mode = "snapshot"` reads a local `.csv` or `.parquet`
 - `snapshot.auto_write = true` writes the fetched exchange dataset back to disk
+- optional `dataset.row_slice.start` / `dataset.row_slice.end` (exclusive) applies a deterministic row window before feature engineering, useful for multi-window regression runs on a single snapshot
 
 ### `runtime`
 
@@ -408,4 +409,10 @@ Run tests:
 
 ```bash
 uv run pytest
+```
+
+Run multi-window regression evidence collection:
+
+```bash
+uv run python scripts/run_regression_windows.py --config config/config.yaml --windows 5
 ```

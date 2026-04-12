@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import logging
@@ -28,6 +29,23 @@ from agents.state import AgentState
 def load_config(path: Path) -> dict[str, Any]:
     with path.open("r", encoding="utf-8") as config_file:
         return yaml.safe_load(config_file)
+
+
+def resolve_config_path(config_arg: str) -> Path:
+    path = Path(config_arg).expanduser()
+    if not path.is_absolute():
+        path = (PROJECT_ROOT / path).resolve()
+    return path
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Run the BTC model-based research prototype.")
+    parser.add_argument(
+        "--config",
+        default="config/config.yaml",
+        help="Path to YAML config (relative paths resolve from project root).",
+    )
+    return parser.parse_args(argv)
 
 
 def build_run_id() -> str:
@@ -340,8 +358,11 @@ def evaluate_readiness(state: AgentState) -> dict[str, Any]:
     }
 
 
-def main() -> None:
-    config_path = PROJECT_ROOT / "config" / "config.yaml"
+def main(argv: list[str] | None = None) -> None:
+    args = parse_args(argv)
+    config_path = resolve_config_path(str(args.config))
+    if not config_path.exists():
+        raise FileNotFoundError(f"Config file not found: {config_path}")
     config = load_config(config_path)
     run_id = build_run_id()
     artifact_dir = _relative_artifact_dir(config, run_id)

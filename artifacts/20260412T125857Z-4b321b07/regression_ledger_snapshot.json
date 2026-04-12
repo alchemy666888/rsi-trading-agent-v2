@@ -1,0 +1,170 @@
+[
+  {
+    "run_id": "20260412T064258Z-069dec95",
+    "generated_at_utc": "2026-04-12T06:46:24.798949+00:00",
+    "dataset_window": {
+      "dataset_hash": "67df13c035d223a3",
+      "snapshot_hash": "791d41cb3045f28d538510831f691367c23f7137106c86aba710e76d0e4cd32b",
+      "raw_data_hash": "d65b2063ad0c12e2b27a99cb769a37f0810491228a2618434eda6eb65c01ace1",
+      "timestamp_start": 1775436060000,
+      "timestamp_end": 1775736000000,
+      "timestamp_start_utc": "2026-04-06T00:41:00+00:00",
+      "timestamp_end_utc": "2026-04-09T12:00:00+00:00"
+    },
+    "metrics": {
+      "validation_sharpe": -16.1192559850337,
+      "walk_forward_mean_sharpe": -57.72324834555518,
+      "held_out_sharpe": -7.958002682159639,
+      "max_drawdown": 0.013220363815617309,
+      "total_return": -0.006601658269937416,
+      "transition_count": 7,
+      "completed_trade_count": 3
+    },
+    "thresholds": {
+      "long_threshold": 0.7458016090195573,
+      "short_threshold": 0.47633360855643747
+    },
+    "git_commit_hash": "d018fa4da36469ddcce15c6ac43acc038a1b3edc",
+    "config_hash": "0ef763714d9f26ff38ccbaf0b8addf10f8dc7511a521b3bcd0a0f2fe07230672"
+  },
+  {
+    "run_id": "20260412T082415Z-b210a56c",
+    "generated_at_utc": "2026-04-12T08:27:37.008527+00:00",
+    "dataset_window": {
+      "dataset_hash": "67df13c035d223a3",
+      "snapshot_hash": "791d41cb3045f28d538510831f691367c23f7137106c86aba710e76d0e4cd32b",
+      "raw_data_hash": "d65b2063ad0c12e2b27a99cb769a37f0810491228a2618434eda6eb65c01ace1",
+      "timestamp_start": 1775436060000,
+      "timestamp_end": 1775736000000,
+      "timestamp_start_utc": "2026-04-06T00:41:00+00:00",
+      "timestamp_end_utc": "2026-04-09T12:00:00+00:00"
+    },
+    "metrics": {
+      "validation_sharpe": -16.1192559850337,
+      "walk_forward_mean_sharpe": -57.36897374162798,
+      "held_out_sharpe": -7.958002682159639,
+      "max_drawdown": 0.013220363815617309,
+      "total_return": -0.006601658269937416,
+      "transition_count": 7,
+      "completed_trade_count": 3
+    },
+    "thresholds": {
+      "long_threshold": 0.7403676659679754,
+      "short_threshold": 0.4785548450330771
+    },
+    "git_commit_hash": "448e5354ab88e80a23b271517f93299f32951961",
+    "config_hash": "0ef763714d9f26ff38ccbaf0b8addf10f8dc7511a521b3bcd0a0f2fe07230672"
+  },
+  {
+    "run_id": "20260412T083215Z-ead497b8",
+    "generated_at_utc": "2026-04-12T08:35:36.761972+00:00",
+    "dataset_window": {
+      "dataset_hash": "67df13c035d223a3",
+      "snapshot_hash": "791d41cb3045f28d538510831f691367c23f7137106c86aba710e76d0e4cd32b",
+      "raw_data_hash": "d65b2063ad0c12e2b27a99cb769a37f0810491228a2618434eda6eb65c01ace1",
+      "timestamp_start": 1775436060000,
+      "timestamp_end": 1775736000000,
+      "timestamp_start_utc": "2026-04-06T00:41:00+00:00",
+      "timestamp_end_utc": "2026-04-09T12:00:00+00:00"
+    },
+    "metrics": {
+      "validation_sharpe": -16.30752540420374,
+      "walk_forward_mean_sharpe": -58.24991210900909,
+      "held_out_sharpe": -9.315626741754388,
+      "max_drawdown": 0.01322036381561753,
+      "total_return": -0.007724575498947006,
+      "transition_count": 9,
+      "completed_trade_count": 4
+    },
+    "thresholds": {
+      "long_threshold": 0.7048160934524403,
+      "short_threshold": 0.4722700402430162
+    },
+    "git_commit_hash": "448e5354ab88e80a23b271517f93299f32951961",
+    "config_hash": "b617b4658e86c9a3d53b1807d5d2e0cea9e82075a1db917fc62fd4fb012413b5"
+  },
+  {
+    "run_id": "20260412T084855Z-243b5637",
+    "generated_at_utc": "2026-04-12T08:52:17.287773+00:00",
+    "dataset_window": {
+      "dataset_hash": "67df13c035d223a3",
+      "snapshot_hash": "791d41cb3045f28d538510831f691367c23f7137106c86aba710e76d0e4cd32b",
+      "raw_data_hash": "d65b2063ad0c12e2b27a99cb769a37f0810491228a2618434eda6eb65c01ace1",
+      "timestamp_start": 1775436060000,
+      "timestamp_end": 1775736000000,
+      "timestamp_start_utc": "2026-04-06T00:41:00+00:00",
+      "timestamp_end_utc": "2026-04-09T12:00:00+00:00"
+    },
+    "metrics": {
+      "validation_sharpe": -16.1192559850337,
+      "walk_forward_mean_sharpe": -56.4307438419635,
+      "held_out_sharpe": -7.958002682159639,
+      "max_drawdown": 0.013220363815617309,
+      "total_return": -0.006601658269937416,
+      "transition_count": 7,
+      "completed_trade_count": 3
+    },
+    "thresholds": {
+      "long_threshold": 0.7420823409914153,
+      "short_threshold": 0.4767364712874927
+    },
+    "git_commit_hash": "cdfb31a732cc1942fd569f6301d872279eed604d",
+    "config_hash": "b617b4658e86c9a3d53b1807d5d2e0cea9e82075a1db917fc62fd4fb012413b5"
+  },
+  {
+    "run_id": "20260412T125615Z-8be1a8d5",
+    "generated_at_utc": "2026-04-12T12:57:54.089629+00:00",
+    "dataset_window": {
+      "dataset_hash": "5ba080698edf2ae7",
+      "snapshot_hash": "791d41cb3045f28d538510831f691367c23f7137106c86aba710e76d0e4cd32b",
+      "raw_data_hash": "44adbd8168dd99ba7e2a8fa8bd4047f2f45209cc1497b7f7082719b5a47c874a",
+      "timestamp_start": 1775556060000,
+      "timestamp_end": 1775736000000,
+      "timestamp_start_utc": "2026-04-07T10:01:00+00:00",
+      "timestamp_end_utc": "2026-04-09T12:00:00+00:00"
+    },
+    "metrics": {
+      "validation_sharpe": -26.70710134266335,
+      "walk_forward_mean_sharpe": -54.40580369805648,
+      "held_out_sharpe": -18.78503314632755,
+      "max_drawdown": 0.019241786736729827,
+      "total_return": -0.01574222350843979,
+      "transition_count": 41,
+      "completed_trade_count": 20
+    },
+    "thresholds": {
+      "long_threshold": 0.5206333049713828,
+      "short_threshold": 0.3989032387907944
+    },
+    "git_commit_hash": "cdfb31a732cc1942fd569f6301d872279eed604d",
+    "config_hash": "0e3ad07c8e5e0a74e0be831779aabece9b1ebb473591b9551ccd34cdc94967c0"
+  },
+  {
+    "run_id": "20260412T125857Z-4b321b07",
+    "generated_at_utc": "2026-04-12T13:00:24.448350+00:00",
+    "dataset_window": {
+      "dataset_hash": "c228882b6085ba71",
+      "snapshot_hash": "791d41cb3045f28d538510831f691367c23f7137106c86aba710e76d0e4cd32b",
+      "raw_data_hash": "7fad5e24d1e6641f2076f86eff9a86b5f3bbe9ff5fc230f30086f4973b53cd92",
+      "timestamp_start": 1775436060000,
+      "timestamp_end": 1775616000000,
+      "timestamp_start_utc": "2026-04-06T00:41:00+00:00",
+      "timestamp_end_utc": "2026-04-08T02:40:00+00:00"
+    },
+    "metrics": {
+      "validation_sharpe": -65.28671066376148,
+      "walk_forward_mean_sharpe": -55.69943432900465,
+      "held_out_sharpe": -56.62039009797503,
+      "max_drawdown": 0.04539926704162067,
+      "total_return": -0.04329041301767789,
+      "transition_count": 90,
+      "completed_trade_count": 45
+    },
+    "thresholds": {
+      "long_threshold": 0.524422892613006,
+      "short_threshold": 0.4404468671829895
+    },
+    "git_commit_hash": "cdfb31a732cc1942fd569f6301d872279eed604d",
+    "config_hash": "8a8f0661bf24dd5c45b3daeca260d4f962102377aff2212898d032fdac16d052"
+  }
+]

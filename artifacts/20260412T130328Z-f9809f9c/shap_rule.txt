@@ -1,0 +1,1 @@
+If macd_hist_12_26_9_lag_5 is elevated (current=-45.4246), the model estimate for long probability typically increases.

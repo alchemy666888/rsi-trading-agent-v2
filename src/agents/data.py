@@ -34,6 +34,61 @@ def _hash_market_frame(raw_df: pl.DataFrame) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def _normalize_optional_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    return int(value)
+
+
+def apply_dataset_row_slice(
+    raw_df: pl.DataFrame,
+    dataset_cfg: dict[str, Any] | None = None,
+) -> tuple[pl.DataFrame, dict[str, Any]]:
+    dataset_cfg = dataset_cfg or {}
+    slice_cfg = dataset_cfg.get("row_slice", {})
+    if not isinstance(slice_cfg, dict):
+        slice_cfg = {}
+
+    requested_start = _normalize_optional_int(slice_cfg.get("start"))
+    requested_end = _normalize_optional_int(slice_cfg.get("end"))
+    if requested_start is None and requested_end is None:
+        return raw_df, {
+            "row_slice_enabled": False,
+            "row_slice_requested_start": None,
+            "row_slice_requested_end": None,
+            "row_slice_start": 0,
+            "row_slice_end": raw_df.height,
+        }
+
+    total_rows = raw_df.height
+    start = 0 if requested_start is None else requested_start
+    end = total_rows if requested_end is None else requested_end
+    if start < 0 or end < 0:
+        raise ValueError("dataset.row_slice start/end must be >= 0.")
+    if start >= end:
+        raise ValueError(
+            f"dataset.row_slice must satisfy start < end. Got start={start}, end={end}."
+        )
+    if start >= total_rows:
+        raise ValueError(
+            f"dataset.row_slice start index {start} is outside dataset rows {total_rows}."
+        )
+    end = min(end, total_rows)
+    sliced = raw_df.slice(start, end - start)
+    if sliced.height < 2:
+        raise ValueError(
+            f"dataset.row_slice produced too few rows ({sliced.height}). Need at least 2."
+        )
+
+    return sliced, {
+        "row_slice_enabled": True,
+        "row_slice_requested_start": requested_start,
+        "row_slice_requested_end": requested_end,
+        "row_slice_start": start,
+        "row_slice_end": end,
+    }
+
+
 def _read_snapshot(snapshot_path: Path) -> pl.DataFrame:
     if snapshot_path.suffix == ".parquet":
         return pl.read_parquet(snapshot_path)
@@ -132,6 +187,7 @@ def load_historical_data(config: dict[str, Any]) -> tuple[pl.DataFrame, dict[str
         raise ValueError(f"Unsupported dataset source mode: {source_mode}")
 
     raw_df = raw_df.sort("timestamp")
+    raw_df, row_slice_meta = apply_dataset_row_slice(raw_df, dataset_cfg=dataset_cfg)
     raw_data_hash = _hash_market_frame(raw_df)
     feature_cfg = dict(config.get("features", {}))
     feature_cfg.setdefault("timeframe", config.get("asset", {}).get("timeframe", "15m"))
@@ -143,6 +199,11 @@ def load_historical_data(config: dict[str, Any]) -> tuple[pl.DataFrame, dict[str
         raw_data_hash=raw_data_hash,
         snapshot_hash=snapshot_hash,
         snapshot_path=str(snapshot_path) if source_mode == "snapshot" else None,
+        row_slice_enabled=bool(row_slice_meta.get("row_slice_enabled", False)),
+        row_slice_requested_start=row_slice_meta.get("row_slice_requested_start"),
+        row_slice_requested_end=row_slice_meta.get("row_slice_requested_end"),
+        row_slice_start=row_slice_meta.get("row_slice_start"),
+        row_slice_end=row_slice_meta.get("row_slice_end"),
     )
     return feature_df, metadata
 
@@ -155,6 +216,11 @@ def build_dataset_metadata(
     raw_data_hash: str | None = None,
     snapshot_hash: str | None = None,
     snapshot_path: str | None = None,
+    row_slice_enabled: bool = False,
+    row_slice_requested_start: int | None = None,
+    row_slice_requested_end: int | None = None,
+    row_slice_start: int | None = None,
+    row_slice_end: int | None = None,
 ) -> dict[str, Any]:
     timestamps = feature_df["timestamp"].to_list()
     missing_values_total = 0
@@ -183,6 +249,11 @@ def build_dataset_metadata(
         "raw_data_hash": raw_data_hash,
         "snapshot_path": snapshot_path,
         "snapshot_hash": snapshot_hash,
+        "row_slice_enabled": row_slice_enabled,
+        "row_slice_requested_start": row_slice_requested_start,
+        "row_slice_requested_end": row_slice_requested_end,
+        "row_slice_start": row_slice_start,
+        "row_slice_end": row_slice_end,
         "benchmark_eligible": source_mode == "snapshot",
         "missing_values_total": missing_values_total,
         "missing_values_by_column": missing_by_column,

@@ -1,0 +1,11 @@
+{
+  "max_feature_lag": 16,
+  "oos_end": 2617,
+  "oos_start": 2417,
+  "purge_bars": 5,
+  "required_embargo_gap": 17,
+  "train_end": 1800,
+  "train_start": 0,
+  "validation_end": 2400,
+  "validation_start": 1800
+}

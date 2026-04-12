@@ -1,0 +1,22 @@
+{
+  "benchmark_eligible": true,
+  "columns": 1017,
+  "dataset_hash": "f5c3ad7bda533188",
+  "missing_values_by_column": {},
+  "missing_values_total": 0,
+  "raw_data_hash": "cbf1a53cbd8f8512c3b22c7a34ea56b82861e348030f6b6d4a60257d7f05adb6",
+  "row_slice_enabled": true,
+  "row_slice_end": 3500,
+  "row_slice_requested_end": 3500,
+  "row_slice_requested_start": 500,
+  "row_slice_start": 500,
+  "rows": 3000,
+  "snapshot_hash": "791d41cb3045f28d538510831f691367c23f7137106c86aba710e76d0e4cd32b",
+  "snapshot_path": "snapshots/btcusdt_15m.parquet",
+  "source_mode": "snapshot",
+  "source_ref": "snapshots/btcusdt_15m.parquet",
+  "timestamp_end": 1775646000000,
+  "timestamp_end_utc": "2026-04-08T11:00:00+00:00",
+  "timestamp_start": 1775466060000,
+  "timestamp_start_utc": "2026-04-06T09:01:00+00:00"
+}

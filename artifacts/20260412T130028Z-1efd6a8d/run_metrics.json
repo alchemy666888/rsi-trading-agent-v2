@@ -1,0 +1,9 @@
+{
+  "sharpe": -73.3411475147435,
+  "max_drawdown": 0.0458178949721586,
+  "total_return": -0.04558805663908694,
+  "bar_win_rate": 0.195,
+  "transition_count": 104,
+  "completed_trade_win_rate": 0.5192307692307693,
+  "completed_trade_count": 52
+}

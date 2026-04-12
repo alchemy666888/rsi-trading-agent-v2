@@ -1,0 +1,28 @@
+{
+  "run_id": "20260412T130328Z-f9809f9c",
+  "generated_at_utc": "2026-04-12T13:04:54.544500+00:00",
+  "dataset_window": {
+    "dataset_hash": "cd85c122380d7daf",
+    "snapshot_hash": "791d41cb3045f28d538510831f691367c23f7137106c86aba710e76d0e4cd32b",
+    "raw_data_hash": "615fe6bb97e380d701b1cbb8150b092ac26930e9aad7f073c71988f94cff09bd",
+    "timestamp_start": 1775526060000,
+    "timestamp_end": 1775706000000,
+    "timestamp_start_utc": "2026-04-07T01:41:00+00:00",
+    "timestamp_end_utc": "2026-04-09T03:40:00+00:00"
+  },
+  "metrics": {
+    "validation_sharpe": -48.76076627101409,
+    "walk_forward_mean_sharpe": -59.6167698529816,
+    "held_out_sharpe": -106.88192747624139,
+    "max_drawdown": 0.06060091788937816,
+    "total_return": -0.060093532060069066,
+    "transition_count": 98,
+    "completed_trade_count": 49
+  },
+  "thresholds": {
+    "long_threshold": 0.7468698680429599,
+    "short_threshold": 0.47900372015575876
+  },
+  "git_commit_hash": "cdfb31a732cc1942fd569f6301d872279eed604d",
+  "config_hash": "2572e05a444cd9252d9bbdad5b1349ff7e98b836246deb10a89baee97408692d"
+}

@@ -1,0 +1,2 @@
+event_index,split,objective_name,objective_value,objective_value_adjusted,long_threshold,short_threshold,affects_future_oos_only,guard_enabled,degenerate_regime,transition_count,min_transition_count,activity_penalty,concentration_penalty,penalty_total,raw_sharpe
+1,validation,validation_sharpe_activity_adjusted,-68.85299162379278,-68.85299162379278,0.6582781044224901,0.4790120608837367,true,true,false,278,12,0.0,0.0,0.0,-68.85299162379278

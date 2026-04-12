@@ -16,7 +16,7 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from agents.artifacts import persist_run_artifacts
-from agents.data import compute_split_metadata
+from agents.data import apply_dataset_row_slice, compute_split_metadata, load_historical_data
 from agents.evaluation import (
     build_walk_forward_folds,
     calibrate_thresholds,
@@ -31,7 +31,7 @@ from agents.metrics_utils import compare_benchmark_metrics, compute_equity_curve
 from agents.modeling import train_lightgbm_baseline
 from agents.nodes import data_node, decision_node, evaluate_node, risk_node, runtime_config_node
 from agents.risk import evaluate_risk
-from run_mvp import evaluate_readiness
+from run_mvp import evaluate_readiness, resolve_config_path
 
 
 def build_test_config() -> dict:
@@ -236,6 +236,49 @@ class PipelineTests(unittest.TestCase):
             split_metadata["oos_start"],
             split_metadata["validation_end"] + max(split_metadata["purge_bars"], split_metadata["required_embargo_gap"]),
         )
+
+    def test_apply_dataset_row_slice_respects_requested_bounds(self) -> None:
+        raw_df = _build_ohlcv(100)
+        sliced, meta = apply_dataset_row_slice(raw_df, {"row_slice": {"start": 10, "end": 30}})
+        self.assertEqual(sliced.height, 20)
+        self.assertEqual(int(sliced["timestamp"][0]), int(raw_df["timestamp"][10]))
+        self.assertEqual(int(sliced["timestamp"][-1]), int(raw_df["timestamp"][29]))
+        self.assertTrue(meta["row_slice_enabled"])
+        self.assertEqual(meta["row_slice_start"], 10)
+        self.assertEqual(meta["row_slice_end"], 30)
+
+    def test_apply_dataset_row_slice_rejects_invalid_bounds(self) -> None:
+        raw_df = _build_ohlcv(50)
+        with self.assertRaises(ValueError):
+            apply_dataset_row_slice(raw_df, {"row_slice": {"start": 25, "end": 25}})
+        with self.assertRaises(ValueError):
+            apply_dataset_row_slice(raw_df, {"row_slice": {"start": -1, "end": 10}})
+
+    def test_load_historical_data_applies_snapshot_row_slice(self) -> None:
+        raw_df = _build_ohlcv(200)
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            snapshot_path = Path(tmp_dir) / "snapshot.parquet"
+            raw_df.write_parquet(snapshot_path)
+            config = build_test_config()
+            config["dataset"] = {
+                "source_mode": "snapshot",
+                "row_slice": {"start": 20, "end": 140},
+            }
+            config["snapshot"] = {"path": str(snapshot_path), "auto_write": False}
+            feature_df, metadata = load_historical_data(config)
+            self.assertEqual(feature_df.height, 120)
+            self.assertTrue(metadata["row_slice_enabled"])
+            self.assertEqual(metadata["row_slice_start"], 20)
+            self.assertEqual(metadata["row_slice_end"], 140)
+            self.assertEqual(int(metadata["timestamp_start"]), int(raw_df["timestamp"][20]))
+            self.assertEqual(int(metadata["timestamp_end"]), int(raw_df["timestamp"][139]))
+
+    def test_resolve_config_path_supports_relative_and_absolute_inputs(self) -> None:
+        relative = resolve_config_path("config/config.yaml")
+        absolute = resolve_config_path(str(PROJECT_ROOT / "config" / "config.yaml"))
+        expected = (PROJECT_ROOT / "config" / "config.yaml").resolve()
+        self.assertEqual(relative, expected)
+        self.assertEqual(absolute, expected)
 
     def test_drop_terminal_supervised_row_trims_last_bar(self) -> None:
         df = pl.DataFrame({"timestamp": [1, 2, 3], "close": [10.0, 11.0, 12.0]})
