@@ -1,0 +1,69 @@
+{
+  "validation_sharpe": -16.30752540420374,
+  "walk_forward_mean_sharpe": -58.24991210900909,
+  "held_out_sharpe": -9.315626741754388,
+  "bad_research_performance": {
+    "triple_negative_sharpe": true
+  },
+  "engineering_validity": {
+    "green": true,
+    "execution_semantics_consistent": true,
+    "kpi_schema_consistent": true,
+    "engineering_blockers": []
+  },
+  "research_validity": {
+    "green": false,
+    "triple_negative_sharpe": true,
+    "degenerate_threshold_calibration": false,
+    "research_blockers": [
+      {
+        "code": "triple_negative_sharpe",
+        "message": "Validation, walk-forward, and held-out Sharpe are all negative.",
+        "validation_sharpe": -16.30752540420374,
+        "walk_forward_mean_sharpe": -58.24991210900909,
+        "held_out_sharpe": -9.315626741754388
+      }
+    ]
+  },
+  "evidence_sufficiency": {
+    "green": false,
+    "snapshot_based": true,
+    "walk_forward_sufficient": true,
+    "benchmark_sufficiency_artifact_available": true,
+    "regression_tracking_available": true,
+    "regression_history_entry_count": 2,
+    "historical_window_count": 1,
+    "minimum_historical_windows": 5,
+    "multi_window_evidence_sufficient": false,
+    "evidence_blockers": [
+      {
+        "code": "multi_window_history_insufficient",
+        "message": "Insufficient historical windows in persisted regression history.",
+        "historical_window_count": 1,
+        "minimum_required": 5
+      }
+    ]
+  },
+  "hard_blockers": [
+    {
+      "code": "triple_negative_sharpe",
+      "message": "Validation, walk-forward, and held-out Sharpe are all negative.",
+      "validation_sharpe": -16.30752540420374,
+      "walk_forward_mean_sharpe": -58.24991210900909,
+      "held_out_sharpe": -9.315626741754388
+    },
+    {
+      "code": "multi_window_history_insufficient",
+      "message": "Insufficient historical windows in persisted regression history.",
+      "historical_window_count": 1,
+      "minimum_required": 5
+    }
+  ],
+  "phase_gate_decision": "do_not_advance",
+  "fine_tuning_gate_open": false,
+  "warnings": [
+    "Validation Sharpe, walk-forward mean Sharpe, and held-out Sharpe are all negative.",
+    "Readiness hard blockers are present; do not advance to fine-tuning or next phase.",
+    "Fine-tuning gate remains closed until multi-window regression evidence meets minimum history requirements."
+  ]
+}

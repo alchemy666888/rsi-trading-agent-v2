@@ -20,6 +20,7 @@ from agents.data import compute_split_metadata
 from agents.evaluation import (
     build_walk_forward_folds,
     calibrate_thresholds,
+    compute_calibration_objective,
     choose_position,
     drop_terminal_supervised_row,
     run_walk_forward_backtest,
@@ -47,6 +48,11 @@ def build_test_config() -> dict:
             "signal_delay_bars": 1,
             "optuna_trials": 5,
             "trade_history_limit": 1000,
+            "calibration_use_activity_guard": True,
+            "calibration_min_transition_count": 8,
+            "calibration_max_one_side_exposure": 0.95,
+            "calibration_transition_penalty": 8.0,
+            "calibration_concentration_penalty": 4.0,
         },
         "risk": {
             "max_abs_position": 1,
@@ -810,6 +816,37 @@ class PipelineTests(unittest.TestCase):
         self.assertTrue(delays)
         self.assertEqual(set(delays), {2})
 
+    def test_compute_calibration_objective_penalizes_low_activity(self) -> None:
+        sim_cfg = dict(build_test_config()["simulation"])
+        sim_cfg["calibration_min_transition_count"] = 12
+        score, diagnostics = compute_calibration_objective(
+            sharpe=0.25,
+            transition_count=2,
+            long_exposure_pct=0.40,
+            short_exposure_pct=0.30,
+            sim_cfg=sim_cfg,
+            usable_rows=200,
+        )
+        self.assertLess(score, 0.25)
+        self.assertGreater(float(diagnostics["activity_penalty"]), 0.0)
+        self.assertTrue(bool(diagnostics["degenerate_regime"]))
+
+    def test_compute_calibration_objective_penalizes_one_sided_exposure(self) -> None:
+        sim_cfg = dict(build_test_config()["simulation"])
+        sim_cfg["calibration_min_transition_count"] = 1
+        sim_cfg["calibration_max_one_side_exposure"] = 0.80
+        score, diagnostics = compute_calibration_objective(
+            sharpe=0.15,
+            transition_count=15,
+            long_exposure_pct=0.92,
+            short_exposure_pct=0.03,
+            sim_cfg=sim_cfg,
+            usable_rows=200,
+        )
+        self.assertLess(score, 0.15)
+        self.assertGreater(float(diagnostics["concentration_penalty"]), 0.0)
+        self.assertTrue(bool(diagnostics["degenerate_regime"]))
+
     def test_multi_timeframe_future_spike_does_not_leak(self) -> None:
         cfg = dict(build_test_config()["features"])
         cfg["multi_timeframe_intervals"] = ["1h", "4h"]
@@ -1045,6 +1082,63 @@ class PipelineTests(unittest.TestCase):
         blocker_codes = {row["code"] for row in readiness["hard_blockers"]}
         self.assertIn("multi_window_history_insufficient", blocker_codes)
         self.assertFalse(readiness["fine_tuning_gate_open"])
+
+    def test_evaluate_readiness_rejects_degenerate_threshold_calibration(self) -> None:
+        config = build_test_config()
+        config["readiness"]["min_historical_windows"] = 1
+        readiness = evaluate_readiness(
+            {
+                "config": config,
+                "dataset_metadata": {
+                    "source_mode": "snapshot",
+                    "snapshot_hash": "sha-current",
+                    "raw_data_hash": "raw-current",
+                    "dataset_hash": "ds-current",
+                    "timestamp_start": 10,
+                    "timestamp_end": 20,
+                },
+                "regression_history": [
+                    {
+                        "dataset_window": {
+                            "snapshot_hash": "sha-current",
+                            "raw_data_hash": "raw-current",
+                            "dataset_hash": "ds-current",
+                            "timestamp_start": 10,
+                            "timestamp_end": 20,
+                        }
+                    }
+                ],
+                "optimization_events": [
+                    {
+                        "objective_value": 0.2,
+                        "diagnostics": {
+                            "guard_enabled": True,
+                            "degenerate_regime": True,
+                            "transition_count": 1,
+                            "min_transition_count": 12,
+                        },
+                    }
+                ],
+                "trades": [],
+                "completed_trades": [],
+                "performance": {
+                    "run_metrics": {
+                        "sharpe": 0.1,
+                        "bar_win_rate": 0.5,
+                        "transition_count": 0,
+                        "completed_trade_win_rate": 0.0,
+                        "completed_trade_count": 0,
+                    },
+                    "benchmark_metrics": {
+                        "overall": {"mean_sharpe": 0.05},
+                        "sufficiency": {"overall_sufficient": True},
+                    },
+                },
+            }
+        )
+        blocker_codes = {row["code"] for row in readiness["hard_blockers"]}
+        self.assertIn("degenerate_threshold_calibration", blocker_codes)
+        self.assertEqual(readiness["phase_gate_decision"], "do_not_advance")
 
     def test_development_plan_matches_default_timeframe(self) -> None:
         plan_text = (PROJECT_ROOT / "docs" / "development-plan.md").read_text(encoding="utf-8")

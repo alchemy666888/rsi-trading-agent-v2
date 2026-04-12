@@ -1,0 +1,321 @@
+{
+  "benchmark_comparison": {
+    "held_out_vs_walk_forward": {
+      "delta_sharpe": 48.9342853672547,
+      "delta_total_return": 0.016464300263035858,
+      "held_out_sharpe": -9.315626741754388,
+      "held_out_total_return": -0.007724575498947006,
+      "walk_forward_mean_sharpe": -58.24991210900909,
+      "walk_forward_mean_total_return": -0.024188875761982864
+    },
+    "overfit_warnings": [
+      "Held-out and walk-forward Sharpe are both negative; strategy is not yet investment-ready."
+    ]
+  },
+  "calibration_summary": {
+    "best_validation_score": -16.30752540420374,
+    "best_validation_score_adjusted": -16.30752540420374,
+    "objective": "validation_sharpe_activity_adjusted",
+    "optimization_events": [
+      {
+        "affects_future_oos_only": true,
+        "best_params": {
+          "long_threshold": 0.7048160934524403,
+          "short_threshold": 0.4722700402430162
+        },
+        "diagnostics": {
+          "activity_penalty": 0.0,
+          "concentration_penalty": 0.0,
+          "degenerate_regime": false,
+          "guard_enabled": true,
+          "long_exposure_pct": 0.0070140280561122245,
+          "max_one_side_exposure": 0.95,
+          "min_transition_count": 12,
+          "penalty_total": 0.0,
+          "raw_sharpe": -16.30752540420374,
+          "score": -16.30752540420374,
+          "short_exposure_pct": 0.9188376753507014,
+          "transition_count": 99
+        },
+        "objective_name": "validation_sharpe_activity_adjusted",
+        "objective_value": -16.30752540420374,
+        "objective_value_adjusted": -16.30752540420374,
+        "split": "validation"
+      }
+    ],
+    "optimization_trials": 1,
+    "strategy_params": {
+      "long_threshold": 0.7048160934524403,
+      "short_threshold": 0.4722700402430162
+    }
+  },
+  "data_quality": {
+    "dataset_metadata": {
+      "benchmark_eligible": true,
+      "columns": 1017,
+      "dataset_hash": "67df13c035d223a3",
+      "missing_values_by_column": {},
+      "missing_values_total": 0,
+      "raw_data_hash": "d65b2063ad0c12e2b27a99cb769a37f0810491228a2618434eda6eb65c01ace1",
+      "rows": 5000,
+      "snapshot_hash": "791d41cb3045f28d538510831f691367c23f7137106c86aba710e76d0e4cd32b",
+      "snapshot_path": "snapshots/btcusdt_15m.parquet",
+      "source_mode": "snapshot",
+      "source_ref": "snapshots/btcusdt_15m.parquet",
+      "timestamp_end": 1775736000000,
+      "timestamp_end_utc": "2026-04-09T12:00:00+00:00",
+      "timestamp_start": 1775436060000,
+      "timestamp_start_utc": "2026-04-06T00:41:00+00:00"
+    },
+    "notes": [
+      "Missing values filled during feature prep: 0.",
+      "Feature columns available for model: 1014.",
+      "Execution convention: signal observed at close(t), executed at close(t + delay), position earns returns from close(t + delay) to close(t + delay + 1).",
+      "Risk checks (drawdown pause, volatility block, stop-loss, take-profit) are evaluated at signal time.",
+      "Slippage assumption (bps): 5.00.",
+      "Benchmark eligible input: True.",
+      "Calibration diagnostics: degenerate_regime=False, transition_count=99, min_transition_count=12, one_side_exposure_max=0.9188.",
+      "Readiness warning: Validation Sharpe, walk-forward mean Sharpe, and held-out Sharpe are all negative.",
+      "Readiness warning: Readiness hard blockers are present; do not advance to fine-tuning or next phase.",
+      "Readiness warning: Fine-tuning gate remains closed until multi-window regression evidence meets minimum history requirements.",
+      "Benchmark sufficiency artifact available: True.",
+      "Regression history windows: 1/5."
+    ],
+    "readiness": {
+      "bad_research_performance": {
+        "triple_negative_sharpe": true
+      },
+      "engineering_validity": {
+        "engineering_blockers": [],
+        "execution_semantics_consistent": true,
+        "green": true,
+        "kpi_schema_consistent": true
+      },
+      "evidence_sufficiency": {
+        "benchmark_sufficiency_artifact_available": true,
+        "evidence_blockers": [
+          {
+            "code": "multi_window_history_insufficient",
+            "historical_window_count": 1,
+            "message": "Insufficient historical windows in persisted regression history.",
+            "minimum_required": 5
+          }
+        ],
+        "green": false,
+        "historical_window_count": 1,
+        "minimum_historical_windows": 5,
+        "multi_window_evidence_sufficient": false,
+        "regression_history_entry_count": 2,
+        "regression_tracking_available": true,
+        "snapshot_based": true,
+        "walk_forward_sufficient": true
+      },
+      "fine_tuning_gate_open": false,
+      "hard_blockers": [
+        {
+          "code": "triple_negative_sharpe",
+          "held_out_sharpe": -9.315626741754388,
+          "message": "Validation, walk-forward, and held-out Sharpe are all negative.",
+          "validation_sharpe": -16.30752540420374,
+          "walk_forward_mean_sharpe": -58.24991210900909
+        },
+        {
+          "code": "multi_window_history_insufficient",
+          "historical_window_count": 1,
+          "message": "Insufficient historical windows in persisted regression history.",
+          "minimum_required": 5
+        }
+      ],
+      "held_out_sharpe": -9.315626741754388,
+      "phase_gate_decision": "do_not_advance",
+      "research_validity": {
+        "degenerate_threshold_calibration": false,
+        "green": false,
+        "research_blockers": [
+          {
+            "code": "triple_negative_sharpe",
+            "held_out_sharpe": -9.315626741754388,
+            "message": "Validation, walk-forward, and held-out Sharpe are all negative.",
+            "validation_sharpe": -16.30752540420374,
+            "walk_forward_mean_sharpe": -58.24991210900909
+          }
+        ],
+        "triple_negative_sharpe": true
+      },
+      "validation_sharpe": -16.30752540420374,
+      "walk_forward_mean_sharpe": -58.24991210900909,
+      "warnings": [
+        "Validation Sharpe, walk-forward mean Sharpe, and held-out Sharpe are all negative.",
+        "Readiness hard blockers are present; do not advance to fine-tuning or next phase.",
+        "Fine-tuning gate remains closed until multi-window regression evidence meets minimum history requirements."
+      ]
+    },
+    "split_metadata": {
+      "max_feature_lag": 16,
+      "oos_end": 4217,
+      "oos_start": 4017,
+      "purge_bars": 5,
+      "required_embargo_gap": 17,
+      "train_end": 3000,
+      "train_start": 0,
+      "validation_end": 4000,
+      "validation_start": 3000
+    }
+  },
+  "equity_diagnostics": {
+    "annualized_volatility": 0.14471951375260195,
+    "bars": 200,
+    "drawdown_episode_count": 5,
+    "drawdown_episodes": [
+      {
+        "duration_bars": 4,
+        "end_idx": 5,
+        "max_drawdown": 0.001004037703770666,
+        "start_idx": 1,
+        "trough_idx": 4
+      },
+      {
+        "duration_bars": 4,
+        "end_idx": 13,
+        "max_drawdown": 0.000583264522781457,
+        "start_idx": 9,
+        "trough_idx": 12
+      },
+      {
+        "duration_bars": 13,
+        "end_idx": 27,
+        "max_drawdown": 0.0023336004930880616,
+        "start_idx": 14,
+        "trough_idx": 20
+      },
+      {
+        "duration_bars": 28,
+        "end_idx": 59,
+        "max_drawdown": 0.005622897037674712,
+        "start_idx": 31,
+        "trough_idx": 44
+      },
+      {
+        "duration_bars": 139,
+        "end_idx": null,
+        "max_drawdown": 0.01322036381561753,
+        "start_idx": 61,
+        "trough_idx": 200
+      }
+    ],
+    "max_drawdown_episode": {
+      "duration_bars": 139,
+      "end_idx": null,
+      "max_drawdown": 0.01322036381561753,
+      "start_idx": 61,
+      "trough_idx": 200
+    }
+  },
+  "event_counts": {
+    "artifact_persistence_started": 1,
+    "config_loaded": 1,
+    "dataset_loaded": 1,
+    "decision_made": 200,
+    "feature_engineering_completed": 1,
+    "model_training_completed": 1,
+    "model_training_started": 1,
+    "oos_simulation_completed": 1,
+    "oos_simulation_started": 1,
+    "optimization_event_recorded": 1,
+    "optimize_cycle": 200,
+    "prediction_generated": 200,
+    "readiness_warning": 1,
+    "risk_evaluated": 200,
+    "run_started": 1,
+    "step_evaluated": 200,
+    "threshold_calibration_completed": 1,
+    "threshold_calibration_started": 1,
+    "trade_closed": 4,
+    "trade_opened": 5,
+    "walk_forward_completed": 1,
+    "walk_forward_started": 1
+  },
+  "failure": null,
+  "headline_kpis": {
+    "avg_completed_trade_return": 0.001955304021801524,
+    "bar_win_rate": 0.475,
+    "completed_trade_count": 4,
+    "completed_trade_win_rate": 0.5,
+    "exposure_stats": {
+      "flat_exposure_pct": 0.035,
+      "long_exposure_pct": 0.005,
+      "short_exposure_pct": 0.96,
+      "turnover": 0.045
+    },
+    "max_drawdown": 0.01322036381561753,
+    "profit_factor": 24.359176825221258,
+    "sharpe": -9.315626741754388,
+    "total_return": -0.007724575498947006,
+    "transition_count": 9,
+    "turnover": 0.045
+  },
+  "metadata": {
+    "benchmark_eligible": true,
+    "config_hash": "b617b4658e86c9a3d53b1807d5d2e0cea9e82075a1db917fc62fd4fb012413b5",
+    "dataset_mode": "snapshot",
+    "dataset_source": "snapshots/btcusdt_15m.parquet",
+    "dataset_span_end": "2026-04-09T12:00:00+00:00",
+    "dataset_span_start": "2026-04-06T00:41:00+00:00",
+    "generated_at_utc": "2026-04-12T08:35:36.728680+00:00",
+    "git_commit_hash": "448e5354ab88e80a23b271517f93299f32951961",
+    "raw_data_hash": "d65b2063ad0c12e2b27a99cb769a37f0810491228a2618434eda6eb65c01ace1",
+    "report_detail_level": "full",
+    "run_id": "20260412T083215Z-ead497b8",
+    "snapshot_hash": "791d41cb3045f28d538510831f691367c23f7137106c86aba710e76d0e4cd32b",
+    "snapshot_path": "snapshots/btcusdt_15m.parquet",
+    "split_counts": {
+      "oos_bars": 200,
+      "total_bars": 5000,
+      "train_bars": 3000,
+      "validation_bars": 1000
+    },
+    "symbol": "BTC/USDT",
+    "timeframe": "15m"
+  },
+  "risk_diagnostics": {
+    "blocked_trades": 0,
+    "drawdown_pause_activated_count": 0,
+    "drawdown_pause_cleared_count": 0,
+    "max_consecutive_losses": 1,
+    "pause_durations_seconds": [],
+    "stop_loss_triggered_count": 0,
+    "take_profit_triggered_count": 0
+  },
+  "trade_diagnostics": {
+    "average_hold_bars": 16.0,
+    "best_trade": {
+      "close_cycle": 32,
+      "close_reason": [],
+      "close_timestamp": 1775678940000,
+      "direction": -1,
+      "entry_price": 92466.44243044061,
+      "exit_price": 91977.03439667303,
+      "hold_bars": 30,
+      "open_cycle": 2,
+      "open_timestamp": 1775677140000,
+      "pnl_pct": 0.005320980796759578
+    },
+    "long_vs_short_breakdown": {
+      "long_trades": 1,
+      "short_trades": 3
+    },
+    "longest_hold_bars": 30,
+    "worst_trade": {
+      "close_cycle": 71,
+      "close_reason": [],
+      "close_timestamp": 1775681280000,
+      "direction": -1,
+      "entry_price": 91742.42094001302,
+      "exit_price": 91767.79001381506,
+      "hold_bars": 8,
+      "open_cycle": 63,
+      "open_timestamp": 1775680800000,
+      "pnl_pct": -0.0002764485643407255
+    }
+  }
+}

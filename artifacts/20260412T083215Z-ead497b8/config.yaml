@@ -1,26 +1,21 @@
 asset:
-  symbol: "BTC/USDT"
-  timeframe: "15m"
-  exchange: "binance"
+  symbol: BTC/USDT
+  timeframe: 15m
+  exchange: binance
   fetch_limit: 2000
-
 dataset:
-  source_mode: "snapshot"
-
+  source_mode: snapshot
 snapshot:
-  path: "snapshots/btcusdt_15m.parquet"
+  path: snapshots/btcusdt_15m.parquet
   auto_write: false
-
 runtime:
   max_cycles: 200
   warmup_bars: 240
-  artifact_output_dir: "artifacts"
-
+  artifact_output_dir: artifacts
 splits:
   train_ratio: 0.6
   validation_ratio: 0.2
   minimum_oos_bars: 200
-
 simulation:
   initial_equity: 10000.0
   slippage_bps: 5
@@ -33,7 +28,6 @@ simulation:
   calibration_max_one_side_exposure: 0.95
   calibration_transition_penalty: 8.0
   calibration_concentration_penalty: 4.0
-
 risk:
   max_abs_position: 1
   max_turnover_per_bar: 1
@@ -41,7 +35,6 @@ risk:
   stop_loss_pct: 0.03
   take_profit_pct: 0.05
   block_high_volatility: false
-
 model:
   n_estimators: 200
   learning_rate: 0.05
@@ -52,12 +45,13 @@ model:
   colsample_bytree: 0.85
   random_state: 42
   n_jobs: -1
-
 features:
   include_multi_timeframe: true
   max_lag_bars: 16
-  multi_timeframe_intervals: ["1h", "4h", "1d"]
-
+  multi_timeframe_intervals:
+  - 1h
+  - 4h
+  - 1d
 walk_forward:
   train_bars: 500
   validation_bars: 150
@@ -66,24 +60,20 @@ walk_forward:
   purge_bars: 5
   min_folds_per_mode: 2
   min_total_test_bars: 240
-
 readiness:
   min_historical_windows: 5
-
 api_keys:
-  polygon_api_key: ""
-  ccxt_api_key: ""
-  ccxt_api_secret: ""
-
+  polygon_api_key: ''
+  ccxt_api_key: ''
+  ccxt_api_secret: ''
 logging:
-  level: "INFO"
+  level: INFO
   enable_json_logs: true
   enable_console_logs: true
-  json_log_filename: "events.jsonl"
+  json_log_filename: events.jsonl
   decision_log_enabled: true
-
 reporting:
-  report_detail_level: "full"
+  report_detail_level: full
   write_report_json: true
   persist_csv_exports: true
   auto_stage_artifacts: false

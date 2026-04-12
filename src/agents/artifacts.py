@@ -254,6 +254,21 @@ def build_report_payload(state: AgentState) -> dict[str, Any]:
     data_quality_notes.append(
         f"Benchmark eligible input: {bool(dataset_metadata.get('benchmark_eligible', False))}."
     )
+    if optimization_events:
+        latest_event = optimization_events[-1] if isinstance(optimization_events[-1], dict) else {}
+        diagnostics = latest_event.get("diagnostics", {})
+        if isinstance(diagnostics, dict) and diagnostics:
+            one_side_exposure_max = max(
+                float(diagnostics.get("long_exposure_pct", 0.0)),
+                float(diagnostics.get("short_exposure_pct", 0.0)),
+            )
+            data_quality_notes.append(
+                "Calibration diagnostics: "
+                f"degenerate_regime={bool(diagnostics.get('degenerate_regime', False))}, "
+                f"transition_count={int(diagnostics.get('transition_count', 0))}, "
+                f"min_transition_count={int(diagnostics.get('min_transition_count', 0))}, "
+                f"one_side_exposure_max={one_side_exposure_max:.4f}."
+            )
     for warning in readiness.get("warnings", []):
         data_quality_notes.append(f"Readiness warning: {warning}")
     evidence = readiness.get("evidence_sufficiency", {})
@@ -304,6 +319,9 @@ def build_report_payload(state: AgentState) -> dict[str, Any]:
             "strategy_params": state.get("strategy_params", {}),
             "objective": optimization_events[-1].get("objective_name", "n/a") if optimization_events else "n/a",
             "best_validation_score": optimization_events[-1].get("objective_value", 0.0) if optimization_events else 0.0,
+            "best_validation_score_adjusted": optimization_events[-1].get("objective_value_adjusted", optimization_events[-1].get("objective_value", 0.0))
+            if optimization_events
+            else 0.0,
             "optimization_trials": len(optimization_events),
             "optimization_events": optimization_events,
         },
@@ -399,6 +417,7 @@ def render_markdown_report(report: dict[str, Any]) -> str:
         f"- Tuned Thresholds: {json.dumps(calibration.get('strategy_params', {}), sort_keys=True)}",
         f"- Objective: {calibration.get('objective')}",
         f"- Best Validation Score: {float(calibration.get('best_validation_score', 0.0)):.4f}",
+        f"- Best Validation Score (Adjusted): {float(calibration.get('best_validation_score_adjusted', calibration.get('best_validation_score', 0.0))):.4f}",
         f"- Optimization Events Recorded: {int(calibration.get('optimization_trials', 0))}",
         "",
         "## Benchmark Comparison",
@@ -678,15 +697,27 @@ def persist_run_artifacts(project_root: Path, state: AgentState) -> Path:
         optimization_rows: list[dict[str, Any]] = []
         for idx, event in enumerate(state.get("optimization_events", []), start=1):
             best_params = event.get("best_params", {}) if isinstance(event, dict) else {}
+            diagnostics = event.get("diagnostics", {}) if isinstance(event, dict) else {}
+            if not isinstance(diagnostics, dict):
+                diagnostics = {}
             optimization_rows.append(
                 {
                     "event_index": idx,
                     "split": event.get("split"),
                     "objective_name": event.get("objective_name"),
                     "objective_value": event.get("objective_value"),
+                    "objective_value_adjusted": event.get("objective_value_adjusted", event.get("objective_value")),
                     "long_threshold": best_params.get("long_threshold"),
                     "short_threshold": best_params.get("short_threshold"),
                     "affects_future_oos_only": event.get("affects_future_oos_only"),
+                    "guard_enabled": diagnostics.get("guard_enabled"),
+                    "degenerate_regime": diagnostics.get("degenerate_regime"),
+                    "transition_count": diagnostics.get("transition_count"),
+                    "min_transition_count": diagnostics.get("min_transition_count"),
+                    "activity_penalty": diagnostics.get("activity_penalty"),
+                    "concentration_penalty": diagnostics.get("concentration_penalty"),
+                    "penalty_total": diagnostics.get("penalty_total"),
+                    "raw_sharpe": diagnostics.get("raw_sharpe"),
                 }
             )
         _write_csv_records(artifact_dir / "optimization_events.csv", optimization_rows)

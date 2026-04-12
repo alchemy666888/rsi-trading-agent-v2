@@ -112,8 +112,10 @@ def evaluate_readiness(state: AgentState) -> dict[str, Any]:
     readiness_cfg = dict(config.get("readiness", {}))
     optimization_events = list(state.get("optimization_events", []))
     validation_sharpe = 0.0
+    latest_optimization_event: dict[str, Any] = {}
     if optimization_events:
-        validation_sharpe = float(optimization_events[-1].get("objective_value", 0.0))
+        latest_optimization_event = dict(optimization_events[-1])
+        validation_sharpe = float(latest_optimization_event.get("objective_value", 0.0))
 
     benchmark_metrics = dict(state.get("performance", {}).get("benchmark_metrics", {}))
     overall = dict(benchmark_metrics.get("overall", {}))
@@ -127,6 +129,15 @@ def evaluate_readiness(state: AgentState) -> dict[str, Any]:
     triple_negative_sharpe = validation_sharpe < 0.0 and walk_forward_mean_sharpe < 0.0 and held_out_sharpe < 0.0
     if triple_negative_sharpe:
         warnings.append("Validation Sharpe, walk-forward mean Sharpe, and held-out Sharpe are all negative.")
+
+    optimization_diagnostics = latest_optimization_event.get("diagnostics", {})
+    if not isinstance(optimization_diagnostics, dict):
+        optimization_diagnostics = {}
+    degenerate_threshold_calibration = bool(optimization_diagnostics.get("degenerate_regime", False))
+    if degenerate_threshold_calibration:
+        warnings.append(
+            "Validation threshold calibration selected a degenerate activity/exposure regime."
+        )
 
     required_kpi_fields = {
         "bar_win_rate",
@@ -225,6 +236,14 @@ def evaluate_readiness(state: AgentState) -> dict[str, Any]:
                 "held_out_sharpe": held_out_sharpe,
             }
         )
+    if degenerate_threshold_calibration:
+        research_blockers.append(
+            {
+                "code": "degenerate_threshold_calibration",
+                "message": "Validation threshold optimization converged to a degenerate activity/exposure regime.",
+                "diagnostics": optimization_diagnostics,
+            }
+        )
 
     evidence_blockers: list[dict[str, Any]] = []
     if not snapshot_based:
@@ -299,6 +318,7 @@ def evaluate_readiness(state: AgentState) -> dict[str, Any]:
         "research_validity": {
             "green": research_green,
             "triple_negative_sharpe": triple_negative_sharpe,
+            "degenerate_threshold_calibration": degenerate_threshold_calibration,
             "research_blockers": research_blockers,
         },
         "evidence_sufficiency": {

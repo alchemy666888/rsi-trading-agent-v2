@@ -1,0 +1,50 @@
+[
+  {
+    "direction": -1,
+    "open_cycle": 2,
+    "close_cycle": 32,
+    "open_timestamp": 1775677140000,
+    "close_timestamp": 1775678940000,
+    "entry_price": 92466.44243044061,
+    "exit_price": 91977.03439667303,
+    "pnl_pct": 0.005320980796759578,
+    "hold_bars": 30,
+    "close_reason": []
+  },
+  {
+    "direction": 1,
+    "open_cycle": 34,
+    "close_cycle": 35,
+    "open_timestamp": 1775679060000,
+    "close_timestamp": 1775679120000,
+    "entry_price": 92049.80213427132,
+    "exit_price": 92044.4286748879,
+    "pnl_pct": -5.837556690868606e-05,
+    "hold_bars": 1,
+    "close_reason": []
+  },
+  {
+    "direction": -1,
+    "open_cycle": 37,
+    "close_cycle": 62,
+    "open_timestamp": 1775679240000,
+    "close_timestamp": 1775680740000,
+    "entry_price": 92037.74900401541,
+    "exit_price": 91777.55418432494,
+    "pnl_pct": 0.002835059421695929,
+    "hold_bars": 25,
+    "close_reason": []
+  },
+  {
+    "direction": -1,
+    "open_cycle": 63,
+    "close_cycle": 71,
+    "open_timestamp": 1775680800000,
+    "close_timestamp": 1775681280000,
+    "entry_price": 91742.42094001302,
+    "exit_price": 91767.79001381506,
+    "pnl_pct": -0.0002764485643407255,
+    "hold_bars": 8,
+    "close_reason": []
+  }
+]

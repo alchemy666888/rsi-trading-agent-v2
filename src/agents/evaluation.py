@@ -125,6 +125,7 @@ def simulate_policy(
     equity_curve: list[float] = []
     trades: list[dict[str, Any]] = []
     completed_trades: list[dict[str, Any]] = []
+    position_path: list[int] = []
     slippage = slippage_bps / 10000.0
     long_threshold = float(strategy_params["long_threshold"])
     short_threshold = float(strategy_params["short_threshold"])
@@ -186,6 +187,7 @@ def simulate_policy(
         equity *= 1.0 + strategy_return
         returns.append(strategy_return)
         equity_curve.append(equity)
+        position_path.append(target_position)
 
         if target_position != position:
             execution_timestamp = int(timestamp[idx]) if timestamp is not None else idx
@@ -242,12 +244,26 @@ def simulate_policy(
         if pause_activated:
             break
 
+    long_exposure_pct = 0.0
+    short_exposure_pct = 0.0
+    flat_exposure_pct = 0.0
+    if position_path:
+        position_arr = np.asarray(position_path, dtype=int)
+        long_exposure_pct = float(np.mean(position_arr > 0))
+        short_exposure_pct = float(np.mean(position_arr < 0))
+        flat_exposure_pct = float(np.mean(position_arr == 0))
+
     return {
         "returns": returns,
         "equity_curve": equity_curve,
         "trades": trades,
         "completed_trades": completed_trades,
         "paused": max_drawdown_seen >= pause_drawdown,
+        "exposure": {
+            "long_exposure_pct": long_exposure_pct,
+            "short_exposure_pct": short_exposure_pct,
+            "flat_exposure_pct": flat_exposure_pct,
+        },
         "metrics": compute_run_metrics(
             returns,
             equity_curve,
@@ -257,6 +273,59 @@ def simulate_policy(
             timeframe=timeframe,
         ),
     }
+
+
+def compute_calibration_objective(
+    *,
+    sharpe: float,
+    transition_count: int,
+    long_exposure_pct: float,
+    short_exposure_pct: float,
+    sim_cfg: dict[str, Any],
+    usable_rows: int,
+) -> tuple[float, dict[str, Any]]:
+    guard_enabled = bool(sim_cfg.get("calibration_use_activity_guard", True))
+    default_min_transitions = max(1, int(max(1, usable_rows - 1) * 0.03))
+    min_transition_count = max(
+        1,
+        int(sim_cfg.get("calibration_min_transition_count", default_min_transitions)),
+    )
+    max_one_side_exposure = float(sim_cfg.get("calibration_max_one_side_exposure", 0.95))
+    max_one_side_exposure = min(1.0, max(0.0, max_one_side_exposure))
+    transition_penalty_scale = max(0.0, float(sim_cfg.get("calibration_transition_penalty", 8.0)))
+    concentration_penalty_scale = max(0.0, float(sim_cfg.get("calibration_concentration_penalty", 4.0)))
+
+    activity_penalty = 0.0
+    if transition_count < min_transition_count:
+        shortfall = min_transition_count - transition_count
+        activity_penalty = transition_penalty_scale * (shortfall / max(1, min_transition_count))
+
+    one_side_exposure = max(float(long_exposure_pct), float(short_exposure_pct))
+    concentration_penalty = 0.0
+    if one_side_exposure > max_one_side_exposure and max_one_side_exposure < 1.0:
+        excess = one_side_exposure - max_one_side_exposure
+        concentration_penalty = concentration_penalty_scale * (excess / max(1e-9, 1.0 - max_one_side_exposure))
+
+    penalty_total = (activity_penalty + concentration_penalty) if guard_enabled else 0.0
+    score = float(sharpe) - float(penalty_total)
+    degenerate_regime = bool(
+        guard_enabled and (activity_penalty > 0.0 or concentration_penalty > 0.0)
+    )
+    diagnostics = {
+        "guard_enabled": guard_enabled,
+        "raw_sharpe": float(sharpe),
+        "score": float(score),
+        "min_transition_count": min_transition_count,
+        "transition_count": int(transition_count),
+        "activity_penalty": float(activity_penalty),
+        "max_one_side_exposure": float(max_one_side_exposure),
+        "long_exposure_pct": float(long_exposure_pct),
+        "short_exposure_pct": float(short_exposure_pct),
+        "concentration_penalty": float(concentration_penalty),
+        "penalty_total": float(penalty_total),
+        "degenerate_regime": degenerate_regime,
+    }
+    return float(score), diagnostics
 
 
 def calibrate_thresholds(
@@ -311,10 +380,31 @@ def calibrate_thresholds(
             funding_rate_per_8h=funding_rate_per_8h,
             timeframe=timeframe,
         )
-        return float(result["metrics"]["sharpe"])
+        metrics = dict(result.get("metrics", {}))
+        exposure = dict(result.get("exposure", {}))
+        raw_sharpe = float(metrics.get("sharpe", 0.0))
+        transition_count = int(metrics.get("transition_count", len(result.get("trades", []))))
+        long_exposure_pct = float(exposure.get("long_exposure_pct", 0.0))
+        short_exposure_pct = float(exposure.get("short_exposure_pct", 0.0))
+        score, diagnostics = compute_calibration_objective(
+            sharpe=raw_sharpe,
+            transition_count=transition_count,
+            long_exposure_pct=long_exposure_pct,
+            short_exposure_pct=short_exposure_pct,
+            sim_cfg=sim_cfg,
+            usable_rows=usable_rows,
+        )
+        trial.set_user_attr("diagnostics", diagnostics)
+        trial.set_user_attr("raw_sharpe", raw_sharpe)
+        return float(score)
 
     study = optuna.create_study(direction="maximize")
     study.optimize(objective, n_trials=int(config["simulation"].get("optuna_trials", 15)))
+
+    best_trial = study.best_trial
+    best_diagnostics = dict(best_trial.user_attrs.get("diagnostics", {}))
+    best_raw_sharpe = float(best_trial.user_attrs.get("raw_sharpe", best_diagnostics.get("raw_sharpe", study.best_value)))
+    guard_enabled = bool(sim_cfg.get("calibration_use_activity_guard", True))
 
     best_params = {
         "long_threshold": float(study.best_params["long_threshold"]),
@@ -322,9 +412,11 @@ def calibrate_thresholds(
     }
     return best_params, {
         "split": "validation",
-        "objective_name": "validation_sharpe",
-        "objective_value": float(study.best_value),
+        "objective_name": "validation_sharpe_activity_adjusted" if guard_enabled else "validation_sharpe",
+        "objective_value": best_raw_sharpe,
+        "objective_value_adjusted": float(study.best_value),
         "affects_future_oos_only": True,
+        "diagnostics": best_diagnostics,
     }
 
 

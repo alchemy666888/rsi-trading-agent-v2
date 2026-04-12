@@ -1,0 +1,21 @@
+{
+  "generated_at_utc": "2026-04-12T08:35:36.737998+00:00",
+  "overall_sufficient": true,
+  "acceptance_thresholds": {
+    "min_folds_per_mode": 2,
+    "min_total_test_bars": 240
+  },
+  "expanding": {
+    "fold_count": 41,
+    "total_test_bars": 4838,
+    "sufficient": true,
+    "reasons": []
+  },
+  "rolling": {
+    "fold_count": 41,
+    "total_test_bars": 4838,
+    "sufficient": true,
+    "reasons": []
+  },
+  "failure_reasons": []
+}
