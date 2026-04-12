@@ -109,6 +109,7 @@ def build_report_payload(state: AgentState) -> dict[str, Any]:
     decision_log = list(state.get("decision_log", []))
     completed_trades = list(state.get("completed_trades", []))
     event_log = list(state.get("event_log", []))
+    readiness = dict(state.get("readiness", {}))
     returns = [float(value) for value in state.get("returns", [])]
     equity_curve = [float(value) for value in state.get("equity_curve", [])]
     initial_equity = _safe_float(config.get("simulation", {}).get("initial_equity"), default=1.0)
@@ -126,6 +127,7 @@ def build_report_payload(state: AgentState) -> dict[str, Any]:
     split_counts.setdefault("total_bars", _safe_int(dataset_metadata.get("rows")))
 
     trade_summary = compute_trade_summary_statistics(completed_trades)
+    run_trade_count = _safe_int(run_metrics.get("trade_count", len(state.get("trades", []))))
     exposure_stats = compute_exposure_stats(decision_log)
     equity_diagnostics = compute_equity_curve_diagnostics(returns, equity_curve, initial_equity)
     event_counts = count_events_by_type(event_log)
@@ -151,6 +153,8 @@ def build_report_payload(state: AgentState) -> dict[str, Any]:
     data_quality_notes.append(
         f"Assumed next-bar execution with slippage_bps={_safe_float(config.get('simulation', {}).get('slippage_bps')):.2f}."
     )
+    for warning in readiness.get("warnings", []):
+        data_quality_notes.append(f"Readiness warning: {warning}")
 
     return {
         "metadata": {
@@ -172,7 +176,7 @@ def build_report_payload(state: AgentState) -> dict[str, Any]:
             "max_drawdown": _safe_float(run_metrics.get("max_drawdown")),
             "total_return": _safe_float(run_metrics.get("total_return")),
             "win_rate": _safe_float(trade_summary.get("win_rate", run_metrics.get("win_rate"))),
-            "trade_count": _safe_int(trade_summary.get("trade_count", run_metrics.get("trade_count"))),
+            "trade_count": run_trade_count,
             "avg_trade_return": _safe_float(trade_summary.get("avg_trade_return")),
             "profit_factor": trade_summary.get("profit_factor", 0.0),
             "turnover": _safe_float(exposure_stats.get("turnover")),
@@ -210,6 +214,7 @@ def build_report_payload(state: AgentState) -> dict[str, Any]:
             "notes": data_quality_notes,
             "dataset_metadata": dataset_metadata,
             "split_metadata": split_metadata,
+            "readiness": readiness,
         },
         "failure": error_info,
         "event_counts": event_counts,
@@ -357,6 +362,22 @@ def persist_run_artifacts(project_root: Path, state: AgentState) -> Path:
     artifact_dir.mkdir(parents=True, exist_ok=True)
 
     report_payload = build_report_payload(state)
+    report_trade_count = _safe_int(report_payload.get("headline_kpis", {}).get("trade_count"))
+    run_metrics = dict(state.get("performance", {}).get("run_metrics", {}))
+    trade_rows_count = len(list(state.get("trades", [])))
+    has_run_trade_count = run_metrics.get("trade_count") is not None
+    run_trade_count = _safe_int(run_metrics.get("trade_count", trade_rows_count))
+    if report_trade_count != run_trade_count:
+        raise AssertionError(
+            "Report trade_count mismatch: "
+            f"report={report_trade_count}, run_metrics={run_trade_count}"
+        )
+    if has_run_trade_count and trade_rows_count != run_trade_count:
+        raise AssertionError(
+            "Trade rows mismatch: "
+            f"trades={trade_rows_count}, run_metrics={run_trade_count}"
+        )
+
     report_text = render_markdown_report(report_payload)
     (artifact_dir / "report.md").write_text(report_text, encoding="utf-8")
 

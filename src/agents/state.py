@@ -44,6 +44,9 @@ class SplitMetadata(TypedDict):
     validation_end: int
     oos_start: int
     oos_end: int
+    purge_bars: int
+    max_feature_lag: int
+    required_embargo_gap: int
 
 
 class AgentState(TypedDict, total=False):
@@ -72,6 +75,9 @@ class AgentState(TypedDict, total=False):
     position: int
     target_position: int
     proposed_position: int
+    pending_signals: list[dict[str, Any]]
+    applied_signal: dict[str, Any] | None
+    signal_delay_bars_runtime: int
     pre_risk_action: Action
     entry_price: float | None
     entry_cycle: int | None

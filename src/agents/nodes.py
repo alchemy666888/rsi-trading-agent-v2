@@ -7,7 +7,7 @@ from agents.decision_audit import build_decision_audit_row, position_label
 from agents.evaluation import TIMEFRAME_MINUTES, compute_run_metrics
 from agents.logging_utils import emit_event
 from agents.modeling import predict_probability
-from agents.risk import evaluate_risk
+from agents.risk import apply_turnover_limit, evaluate_risk
 from agents.state import AgentState
 
 
@@ -33,6 +33,22 @@ def data_node(state: AgentState) -> AgentState:
     historical_data = state["historical_data"]
     cursor = int(state["cursor"])
     split_metadata = state["split_metadata"]
+    validation_end = int(split_metadata.get("validation_end", 0))
+    purge_bars = int(split_metadata.get("purge_bars", 5))
+    required_embargo_gap = int(split_metadata.get("required_embargo_gap", purge_bars))
+    min_oos_cursor = validation_end + max(purge_bars, required_embargo_gap)
+    if cursor < min_oos_cursor:
+        cursor = min_oos_cursor
+        emit_event(
+            state,
+            stage="data",
+            event_type="oos_cursor_adjusted",
+            message="Cursor moved forward to enforce purge/embargo guardrails.",
+            min_oos_cursor=min_oos_cursor,
+            required_embargo_gap=required_embargo_gap,
+            purge_bars=purge_bars,
+        )
+
     oos_end = int(split_metadata["oos_end"])
     done = bool(state.get("paused", False)) or cursor >= oos_end
     if done:
@@ -44,17 +60,27 @@ def data_node(state: AgentState) -> AgentState:
             done=done,
             paused=bool(state.get("paused", False)),
         )
-        return {"done": True}
+        return {"done": True, "cursor": cursor}
 
     current_row = historical_data.row(cursor, named=True)
-    return {"current_row": current_row, "done": False}
+    return {"cursor": cursor, "current_row": current_row, "done": False}
+
+
+def runtime_config_node(state: AgentState) -> AgentState:
+    sim_cfg = dict(state.get("config", {}).get("simulation", {}))
+    delay_bars = max(0, int(sim_cfg.get("signal_delay_bars", 1)))
+    return {"signal_delay_bars_runtime": delay_bars}
 
 
 def predict_node(state: AgentState) -> AgentState:
     row = state["current_row"]
+    cursor = int(state["cursor"])
+    historical_data = state["historical_data"]
+    delay_bars = max(0, int(state.get("signal_delay_bars_runtime", 0)))
     prob_up = predict_probability(row, state.get("lightgbm_model"), state.get("feature_columns", []))
     regime = "high_volatility" if float(row.get("volatility_regime", 0.0)) >= 0.5 else "normal"
-    next_timestamp = int(state["historical_data"]["timestamp"][int(state["cursor"]) + 1])
+    execution_index = min(cursor + delay_bars + 1, historical_data.height - 1)
+    next_timestamp = int(historical_data["timestamp"][execution_index])
     prediction = {
         "prob_up": prob_up,
         "regime": regime,
@@ -147,8 +173,57 @@ def risk_node(state: AgentState) -> AgentState:
 
 
 def decision_node(state: AgentState) -> AgentState:
+    config = dict(state.get("config", {}))
+    risk_cfg = config.get("risk", {})
+    max_turnover_per_bar = int(risk_cfg.get("max_turnover_per_bar", 1))
+    delay_bars = max(0, int(state.get("signal_delay_bars_runtime", 0)))
+    cursor = int(state.get("cursor", 0))
+    split_metadata = dict(state.get("split_metadata", {}))
+    oos_end = int(split_metadata.get("oos_end", cursor + delay_bars + 2))
     current_position = int(state.get("position", 0))
-    target_position = int(state.get("target_position", current_position))
+    proposed_target_position = int(state.get("target_position", current_position))
+    pending_signals = [
+        dict(entry)
+        for entry in state.get("pending_signals", [])
+        if isinstance(entry, dict)
+    ]
+    apply_cursor = cursor + delay_bars
+    if apply_cursor < oos_end:
+        pending_signals.append(
+            {
+                "apply_cursor": apply_cursor,
+                "target_position": proposed_target_position,
+                "signal_cursor": cursor,
+                "signal_timestamp": int(state.get("prediction", {}).get("signal_timestamp", cursor)),
+            }
+        )
+
+    pending_signals.sort(key=lambda row: int(row.get("apply_cursor", 0)))
+    target_position = current_position
+    applied_signal: dict[str, Any] | None = None
+    remaining_signals: list[dict[str, Any]] = []
+    for signal in pending_signals:
+        signal_apply_cursor = int(signal.get("apply_cursor", -1))
+        if signal_apply_cursor <= cursor and applied_signal is None:
+            raw_target_position = int(signal.get("target_position", current_position))
+            target_position = apply_turnover_limit(current_position, raw_target_position, max_turnover_per_bar)
+            historical_data = state.get("historical_data")
+            if historical_data is not None and hasattr(historical_data, "height"):
+                execution_idx = min(cursor + 1, historical_data.height - 1)
+                execution_timestamp = int(historical_data["timestamp"][execution_idx])
+            else:
+                execution_timestamp = cursor + 1
+            applied_signal = {
+                "signal_cursor": int(signal.get("signal_cursor", cursor)),
+                "signal_timestamp": int(signal.get("signal_timestamp", state.get("prediction", {}).get("signal_timestamp", cursor))),
+                "apply_cursor": signal_apply_cursor,
+                "execution_timestamp": execution_timestamp,
+                "requested_target_position": raw_target_position,
+                "applied_target_position": target_position,
+            }
+            continue
+        remaining_signals.append(signal)
+
     action = _action_from_transition(current_position, target_position)
     emit_event(
         state,
@@ -158,10 +233,19 @@ def decision_node(state: AgentState) -> AgentState:
         action=action,
         current_position=current_position,
         target_position=target_position,
+        proposed_target_position=proposed_target_position,
+        signal_delay_bars=delay_bars,
+        pending_signals=len(remaining_signals),
         pre_risk_action=state.get("pre_risk_action"),
         proposed_position=state.get("proposed_position"),
+        applied_signal=applied_signal,
     )
-    return {"last_action": action}
+    return {
+        "last_action": action,
+        "target_position": target_position,
+        "pending_signals": remaining_signals,
+        "applied_signal": applied_signal,
+    }
 
 
 def _build_completed_trade(
@@ -193,6 +277,9 @@ def evaluate_node(state: AgentState) -> AgentState:
     cursor = int(state["cursor"])
     current_position = int(state.get("position", 0))
     target_position = int(state.get("target_position", current_position))
+    applied_signal = state.get("applied_signal", {})
+    if not isinstance(applied_signal, dict):
+        applied_signal = {}
 
     close_now = float(data["close"][cursor])
     close_next = float(data["close"][cursor + 1])
@@ -223,17 +310,20 @@ def evaluate_node(state: AgentState) -> AgentState:
     realized_pnl_pct: float | None = None
 
     if target_position != current_position:
+        signal_timestamp = int(applied_signal.get("signal_timestamp", state["prediction"]["signal_timestamp"]))
+        execution_timestamp = int(applied_signal.get("execution_timestamp", state["prediction"]["execution_timestamp"]))
         trade_event = {
             "cycle": len(returns),
             "bar_timestamp": int(state["current_row"]["timestamp"]),
-            "signal_timestamp": int(state["prediction"]["signal_timestamp"]),
-            "execution_timestamp": int(state["prediction"]["execution_timestamp"]),
+            "signal_timestamp": signal_timestamp,
+            "execution_timestamp": execution_timestamp,
             "action": state["last_action"],
             "from_position": current_position,
             "to_position": target_position,
             "price": close_now,
             "prob_up": float(state["prediction"]["prob_up"]),
             "risk_reasons": state.get("risk_status", {}).get("reasons", []),
+            "signal_delay_bars": int(state.get("signal_delay_bars_runtime", 1)),
         }
         trades.append(trade_event)
         trade_history_buffer.append(
@@ -269,7 +359,9 @@ def evaluate_node(state: AgentState) -> AgentState:
     if target_position != current_position:
         entry_price = None if target_position == 0 else close_now
         entry_cycle = None if target_position == 0 else len(returns)
-        entry_timestamp = None if target_position == 0 else int(state["prediction"]["execution_timestamp"])
+        entry_timestamp = None if target_position == 0 else int(
+            applied_signal.get("execution_timestamp", state["prediction"]["execution_timestamp"])
+        )
     if target_position != current_position and target_position != 0:
         emit_event(
             state,

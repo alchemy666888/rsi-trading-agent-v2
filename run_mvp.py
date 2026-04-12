@@ -67,6 +67,31 @@ def _build_error_info(exc: Exception) -> dict[str, Any]:
     }
 
 
+def evaluate_readiness(state: AgentState) -> dict[str, Any]:
+    optimization_events = list(state.get("optimization_events", []))
+    validation_sharpe = 0.0
+    if optimization_events:
+        validation_sharpe = float(optimization_events[-1].get("objective_value", 0.0))
+
+    benchmark_metrics = dict(state.get("performance", {}).get("benchmark_metrics", {}))
+    overall = dict(benchmark_metrics.get("overall", {}))
+    walk_forward_mean_sharpe = float(overall.get("mean_sharpe", 0.0))
+    held_out_sharpe = float(state.get("performance", {}).get("run_metrics", {}).get("sharpe", 0.0))
+
+    warnings: list[str] = []
+    if validation_sharpe < 0.0 and walk_forward_mean_sharpe < 0.0 and held_out_sharpe < 0.0:
+        warnings.append(
+            "Validation Sharpe, walk-forward mean Sharpe, and held-out Sharpe are all negative."
+        )
+
+    return {
+        "validation_sharpe": validation_sharpe,
+        "walk_forward_mean_sharpe": walk_forward_mean_sharpe,
+        "held_out_sharpe": held_out_sharpe,
+        "warnings": warnings,
+    }
+
+
 def main() -> None:
     config_path = PROJECT_ROOT / "config" / "config.yaml"
     config = load_config(config_path)
@@ -138,6 +163,15 @@ def main() -> None:
             message="Out-of-sample simulation loop completed.",
             completed_cycles=len(final_state.get("returns", [])),
         )
+        readiness = evaluate_readiness(final_state)
+        final_state["readiness"] = readiness
+        if readiness.get("warnings"):
+            event_logger.emit(
+                stage="run",
+                event_type="readiness_warning",
+                message="Readiness warning detected.",
+                readiness=readiness,
+            )
 
         event_logger.emit(
             stage="artifacts",

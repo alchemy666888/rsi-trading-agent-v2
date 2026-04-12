@@ -5,7 +5,9 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
+import numpy as np
 import polars as pl
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -15,8 +17,12 @@ if str(SRC_ROOT) not in sys.path:
 
 from agents.artifacts import persist_run_artifacts
 from agents.data import compute_split_metadata
-from agents.evaluation import build_walk_forward_folds, simulate_policy
+from agents.evaluation import build_walk_forward_folds, calibrate_thresholds, simulate_policy
+from agents.features import build_features
+from agents.metrics_utils import compare_benchmark_metrics
+from agents.nodes import data_node, runtime_config_node
 from agents.risk import evaluate_risk
+from run_mvp import evaluate_readiness
 
 
 def build_test_config() -> dict:
@@ -26,7 +32,13 @@ def build_test_config() -> dict:
         "snapshot": {"path": "ignored.parquet", "auto_write": False},
         "runtime": {"max_cycles": 200, "warmup_bars": 120, "artifact_output_dir": "artifacts"},
         "splits": {"train_ratio": 0.6, "validation_ratio": 0.2, "minimum_oos_bars": 150},
-        "simulation": {"initial_equity": 10000.0, "slippage_bps": 5, "signal_delay_bars": 1, "optuna_trials": 5, "trade_history_limit": 1000},
+        "simulation": {
+            "initial_equity": 10000.0,
+            "slippage_bps": 5,
+            "signal_delay_bars": 1,
+            "optuna_trials": 5,
+            "trade_history_limit": 1000,
+        },
         "risk": {
             "max_abs_position": 1,
             "max_turnover_per_bar": 1,
@@ -34,6 +46,12 @@ def build_test_config() -> dict:
             "stop_loss_pct": 0.03,
             "take_profit_pct": 0.05,
             "block_high_volatility": True,
+        },
+        "features": {
+            "include_multi_timeframe": True,
+            "max_lag_bars": 16,
+            "multi_timeframe_intervals": ["1h", "4h"],
+            "timeframe": "15m",
         },
         "walk_forward": {"train_bars": 240, "validation_bars": 60, "test_bars": 40, "step_bars": 20, "purge_bars": 5},
         "logging": {
@@ -52,35 +70,139 @@ def build_test_config() -> dict:
     }
 
 
+def _build_ohlcv(rows: int, *, spike_start: int | None = None) -> pl.DataFrame:
+    timestamps = [1_700_000_000_000 + (idx * 900_000) for idx in range(rows)]
+    close = np.linspace(100.0, 100.0 + rows - 1, rows, dtype=float)
+    if spike_start is not None:
+        close[spike_start:] = close[spike_start:] * 10.0
+    open_ = close - 0.5
+    high = close + 1.0
+    low = close - 1.0
+    volume = np.full(rows, 1000.0, dtype=float)
+    return pl.DataFrame(
+        {
+            "timestamp": timestamps,
+            "open": open_,
+            "high": high,
+            "low": low,
+            "close": close,
+            "volume": volume,
+        }
+    )
+
+
 class PipelineTests(unittest.TestCase):
+    def _build_artifact_state(self, trade_count: int, completed_trade_count: int) -> dict:
+        trades = [{"action": "LONG", "idx": idx} for idx in range(trade_count)]
+        completed = [{"direction": 1, "pnl_pct": 0.01, "hold_bars": 2} for _ in range(completed_trade_count)]
+        return {
+            "config": build_test_config(),
+            "run_id": "test-run",
+            "artifact_dir": "artifacts/test-run",
+            "dataset_metadata": {"rows": 100, "source_mode": "snapshot"},
+            "split_metadata": {
+                "train_start": 0,
+                "train_end": 60,
+                "validation_start": 60,
+                "validation_end": 80,
+                "oos_start": 80,
+                "oos_end": 99,
+                "purge_bars": 5,
+                "max_feature_lag": 16,
+                "required_embargo_gap": 17,
+            },
+            "strategy_params": {"long_threshold": 0.6, "short_threshold": 0.4},
+            "optimization_events": [
+                {
+                    "split": "validation",
+                    "objective_name": "validation_sharpe",
+                    "objective_value": 1.23,
+                    "best_params": {"long_threshold": 0.6, "short_threshold": 0.4},
+                    "affects_future_oos_only": True,
+                }
+            ],
+            "feature_importances": [{"feature": "rsi_14", "importance": 10.0}],
+            "trades": trades,
+            "trade_history_buffer": list(trades),
+            "completed_trades": completed,
+            "decision_log": [],
+            "event_log": [{"event_type": "run_started"}],
+            "equity_curve": [10050.0],
+            "returns": [0.005],
+            "performance": {
+                "run_metrics": {
+                    "sharpe": 1.0,
+                    "max_drawdown": 0.01,
+                    "win_rate": 1.0,
+                    "total_return": 0.005,
+                    "trade_count": trade_count,
+                },
+                "benchmark_metrics": {
+                    "settings": {
+                        "train_bars": 240,
+                        "validation_bars": 60,
+                        "test_bars": 40,
+                        "purge_bars": 5,
+                        "signal_delay_bars": 1,
+                    },
+                    "expanding": {"mean_sharpe": 0.1, "mean_max_drawdown": 0.02, "mean_total_return": 0.03, "mean_win_rate": 0.6, "folds": [1]},
+                    "rolling": {"mean_sharpe": 0.2, "mean_max_drawdown": 0.03, "mean_total_return": 0.04, "mean_win_rate": 0.7, "folds": [1]},
+                    "overall": {"mean_sharpe": 0.15, "mean_max_drawdown": 0.025, "mean_total_return": 0.035, "mean_win_rate": 0.65},
+                },
+            },
+            "shap_rule": "Test rule",
+            "cursor": 90,
+            "paused": False,
+            "run_metadata": {
+                "git_commit_hash": "abc",
+                "config_hash": "xyz",
+                "split_counts": {"total_bars": 100, "train_bars": 60, "validation_bars": 20, "oos_bars": 19},
+            },
+        }
+
     def test_split_metadata_keeps_oos_after_validation(self) -> None:
         config = build_test_config()
         split_metadata = compute_split_metadata(config, total_rows=1200)
         self.assertLess(split_metadata["train_end"], split_metadata["validation_end"])
-        self.assertLess(split_metadata["validation_end"], split_metadata["oos_start"] + 1)
         self.assertGreaterEqual(split_metadata["oos_start"], split_metadata["validation_end"])
         self.assertGreater(split_metadata["oos_end"], split_metadata["oos_start"])
-
-    def test_signal_delay_and_trade_costs_apply_to_next_bar(self) -> None:
-        close = pl.Series("close", [100.0, 110.0, 121.0]).to_numpy()
-        probs = pl.Series("prob", [0.9, 0.1, 0.1]).to_numpy()
-        volatility_regime = pl.Series("regime", [0, 0, 0]).to_numpy()
-        timestamps = pl.Series("timestamp", [1, 2, 3]).to_numpy()
-        result = simulate_policy(
-            close=close,
-            probs=probs,
-            volatility_regime=volatility_regime,
-            strategy_params={"long_threshold": 0.6, "short_threshold": 0.4},
-            risk_cfg={"max_abs_position": 1, "max_turnover_per_bar": 2, "block_high_volatility": False, "stop_loss_pct": 0.0, "take_profit_pct": 0.0},
-            initial_equity=10000.0,
-            slippage_bps=0.0,
-            timestamp=timestamps,
+        self.assertGreaterEqual(
+            split_metadata["oos_start"],
+            split_metadata["validation_end"] + max(split_metadata["purge_bars"], split_metadata["required_embargo_gap"]),
         )
-        self.assertEqual(len(result["returns"]), 2)
-        self.assertAlmostEqual(result["returns"][0], 0.10, places=6)
-        self.assertAlmostEqual(result["returns"][1], -0.10, places=6)
-        self.assertEqual(result["trades"][0]["to_position"], 1)
-        self.assertEqual(result["trades"][1]["to_position"], -1)
+
+    def test_signal_delay_shift_execution_timestamp_and_changes_return(self) -> None:
+        close = pl.Series("close", [100.0, 110.0, 100.0, 110.0, 100.0]).to_numpy()
+        probs = pl.Series("prob", [0.9, 0.9, 0.1, 0.1, 0.1]).to_numpy()
+        volatility_regime = pl.Series("regime", [0, 0, 0, 0, 0]).to_numpy()
+        timestamps = pl.Series("timestamp", [1, 2, 3, 4, 5]).to_numpy()
+        kwargs = {
+            "close": close,
+            "probs": probs,
+            "volatility_regime": volatility_regime,
+            "strategy_params": {"long_threshold": 0.6, "short_threshold": 0.4},
+            "risk_cfg": {
+                "max_abs_position": 1,
+                "max_turnover_per_bar": 2,
+                "block_high_volatility": False,
+                "stop_loss_pct": 0.0,
+                "take_profit_pct": 0.0,
+            },
+            "initial_equity": 10000.0,
+            "slippage_bps": 0.0,
+            "timestamp": timestamps,
+        }
+        delay_0 = simulate_policy(**kwargs, signal_delay_bars=0)
+        delay_1 = simulate_policy(**kwargs, signal_delay_bars=1)
+        self.assertTrue(delay_0["trades"])
+        self.assertTrue(delay_1["trades"])
+        trade_pairs = min(len(delay_0["trades"]), len(delay_1["trades"]))
+        for idx in range(trade_pairs):
+            self.assertEqual(
+                delay_1["trades"][idx]["execution_timestamp"] - delay_0["trades"][idx]["execution_timestamp"],
+                1,
+            )
+        self.assertNotAlmostEqual(sum(delay_0["returns"]), sum(delay_1["returns"]), places=9)
 
     def test_drawdown_pause_and_high_vol_block(self) -> None:
         state = {
@@ -105,53 +227,7 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual(fold["test_start"] - fold["validation_end"], config["walk_forward"]["purge_bars"])
 
     def test_artifact_bundle_writes_expected_files(self) -> None:
-        state = {
-            "config": build_test_config(),
-            "run_id": "test-run",
-            "artifact_dir": "artifacts/test-run",
-            "dataset_metadata": {"rows": 100, "source_mode": "snapshot"},
-            "split_metadata": {"train_start": 0, "train_end": 60, "validation_start": 60, "validation_end": 80, "oos_start": 80, "oos_end": 99},
-            "strategy_params": {"long_threshold": 0.6, "short_threshold": 0.4},
-            "optimization_events": [{"split": "validation", "objective_name": "validation_sharpe", "objective_value": 1.23, "best_params": {"long_threshold": 0.6, "short_threshold": 0.4}, "affects_future_oos_only": True}],
-            "feature_importances": [{"feature": "rsi_14", "importance": 10.0}],
-            "trades": [{"action": "LONG"}],
-            "trade_history_buffer": [{"action": "LONG"}],
-            "completed_trades": [{"direction": 1, "pnl_pct": 0.01, "hold_bars": 2}],
-            "decision_log": [
-                {
-                    "cursor": 81,
-                    "bar_timestamp": 123,
-                    "close_price": 50000.0,
-                    "model_output": {"prob_up": 0.7, "regime": "normal", "source_model": "lightgbm_baseline"},
-                    "thresholds": {"long_threshold": 0.6, "short_threshold": 0.4},
-                    "risk_constraints_applied": {"reasons": []},
-                    "final_action": "LONG",
-                    "from_position": 0,
-                    "target_position": 1,
-                    "resulting_position": 1,
-                    "strategy_return": 0.005,
-                    "realized_pnl_pct": None,
-                    "unrealized_pnl_pct": 0.0,
-                    "reason_codes": [],
-                    "selected_features": {"rsi_14": 55.0},
-                }
-            ],
-            "event_log": [{"event_type": "run_started"}],
-            "equity_curve": [10050.0],
-            "returns": [0.005],
-            "performance": {
-                "run_metrics": {"sharpe": 1.0, "max_drawdown": 0.01, "win_rate": 1.0, "total_return": 0.005, "trade_count": 1},
-                "benchmark_metrics": {
-                    "settings": {"train_bars": 240, "validation_bars": 60, "test_bars": 40, "purge_bars": 5, "signal_delay_bars": 1},
-                    "expanding": {"mean_sharpe": 0.1, "mean_max_drawdown": 0.02, "mean_total_return": 0.03, "mean_win_rate": 0.6, "folds": [1]},
-                    "rolling": {"mean_sharpe": 0.2, "mean_max_drawdown": 0.03, "mean_total_return": 0.04, "mean_win_rate": 0.7, "folds": [1]},
-                },
-            },
-            "shap_rule": "Test rule",
-            "cursor": 90,
-            "paused": False,
-            "run_metadata": {"git_commit_hash": "abc", "config_hash": "xyz", "split_counts": {"total_bars": 100, "train_bars": 60, "validation_bars": 20, "oos_bars": 19}},
-        }
+        state = self._build_artifact_state(trade_count=1, completed_trade_count=1)
         with tempfile.TemporaryDirectory() as tmp_dir:
             artifact_path = persist_run_artifacts(Path(tmp_dir), state)
             self.assertTrue((artifact_path / "report.md").exists())
@@ -165,6 +241,113 @@ class PipelineTests(unittest.TestCase):
             self.assertIn("Headline KPIs", report_text)
             benchmark_payload = json.loads((artifact_path / "benchmark_metrics.json").read_text(encoding="utf-8"))
             self.assertIn("expanding", benchmark_payload)
+
+    def test_report_trade_count_prefers_run_metrics(self) -> None:
+        state = self._build_artifact_state(trade_count=3, completed_trade_count=1)
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            artifact_path = persist_run_artifacts(Path(tmp_dir), state)
+            report_text = (artifact_path / "report.md").read_text(encoding="utf-8")
+            self.assertIn("| Trade Count | 3 |", report_text)
+
+    def test_artifact_persistence_asserts_trade_count_mismatch(self) -> None:
+        state = self._build_artifact_state(trade_count=2, completed_trade_count=2)
+        state["trades"] = [{"action": "LONG"}]
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            with self.assertRaises(AssertionError):
+                persist_run_artifacts(Path(tmp_dir), state)
+
+    def test_calibrate_thresholds_propagates_signal_delay(self) -> None:
+        config = build_test_config()
+        config["simulation"]["signal_delay_bars"] = 2
+        config["simulation"]["optuna_trials"] = 2
+        validation_df = pl.DataFrame(
+            {
+                "close": np.linspace(100.0, 200.0, 50, dtype=float),
+                "volatility_regime": np.zeros(50, dtype=int),
+                "timestamp": np.arange(1_700_000_000_000, 1_700_000_000_000 + (50 * 900_000), 900_000, dtype=int),
+            }
+        )
+        probs = np.full(50, 0.7, dtype=float)
+        delays: list[int] = []
+
+        def _fake_simulate(*args, **kwargs):
+            delays.append(int(kwargs.get("signal_delay_bars", -1)))
+            return {"metrics": {"sharpe": 0.0}, "returns": [], "equity_curve": [], "trades": []}
+
+        with patch("agents.evaluation.simulate_policy", side_effect=_fake_simulate):
+            calibrate_thresholds(validation_df, probs, config)
+        self.assertTrue(delays)
+        self.assertEqual(set(delays), {2})
+
+    def test_multi_timeframe_future_spike_does_not_leak(self) -> None:
+        cfg = dict(build_test_config()["features"])
+        cfg["multi_timeframe_intervals"] = ["1h", "4h"]
+        cfg["max_lag_bars"] = 4
+        baseline = build_features(_build_ohlcv(120), feature_cfg=cfg)
+        spiked = build_features(_build_ohlcv(120, spike_start=96), feature_cfg=cfg)
+        tf_cols = [col for col in baseline.columns if col.startswith("tf_")]
+        self.assertTrue(tf_cols)
+        safe_rows = baseline.filter(pl.col("timestamp") < int(_build_ohlcv(120)["timestamp"][92]))
+        safe_rows_spiked = spiked.filter(pl.col("timestamp") < int(_build_ohlcv(120)["timestamp"][92]))
+        for col in tf_cols:
+            self.assertTrue(np.allclose(safe_rows[col].to_numpy(), safe_rows_spiked[col].to_numpy(), atol=1e-12))
+
+    def test_data_node_enforces_purge_and_embargo(self) -> None:
+        historical_data = pl.DataFrame(
+            {
+                "timestamp": [1_700_000_000_000 + (idx * 900_000) for idx in range(64)],
+                "close": [100.0 + idx for idx in range(64)],
+            }
+        )
+        state = {
+            "historical_data": historical_data,
+            "cursor": 12,
+            "paused": False,
+            "split_metadata": {
+                "train_start": 0,
+                "train_end": 20,
+                "validation_start": 20,
+                "validation_end": 30,
+                "oos_start": 31,
+                "oos_end": 63,
+                "purge_bars": 5,
+                "max_feature_lag": 16,
+                "required_embargo_gap": 17,
+            },
+        }
+        out = data_node(state)
+        expected_cursor = 30 + max(5, 17)
+        self.assertEqual(out["cursor"], expected_cursor)
+        self.assertEqual(out["current_row"]["timestamp"], int(historical_data["timestamp"][expected_cursor]))
+
+    def test_runtime_config_node_reads_signal_delay(self) -> None:
+        out = runtime_config_node({"config": {"simulation": {"signal_delay_bars": 3}}})
+        self.assertEqual(out["signal_delay_bars_runtime"], 3)
+
+    def test_split_metadata_records_feature_lag_and_embargo(self) -> None:
+        config = build_test_config()
+        metadata = compute_split_metadata(config, total_rows=1200)
+        self.assertEqual(metadata["max_feature_lag"], config["features"]["max_lag_bars"])
+        self.assertGreaterEqual(metadata["required_embargo_gap"], metadata["purge_bars"])
+
+    def test_compare_benchmark_metrics_warns_on_negative_sharpe_pair(self) -> None:
+        out = compare_benchmark_metrics(
+            {"sharpe": -1.0, "total_return": -0.10},
+            {"overall": {"mean_sharpe": -0.5, "mean_total_return": -0.03}},
+        )
+        self.assertTrue(any("both negative" in message for message in out["overfit_warnings"]))
+
+    def test_evaluate_readiness_triggers_triple_negative_warning(self) -> None:
+        readiness = evaluate_readiness(
+            {
+                "optimization_events": [{"objective_value": -0.7}],
+                "performance": {
+                    "run_metrics": {"sharpe": -1.2},
+                    "benchmark_metrics": {"overall": {"mean_sharpe": -0.8}},
+                },
+            }
+        )
+        self.assertTrue(readiness["warnings"])
 
 
 if __name__ == "__main__":

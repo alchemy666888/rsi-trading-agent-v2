@@ -176,6 +176,8 @@ def compare_benchmark_metrics(
         warnings.append("Held-out total return is far above walk-forward mean total return.")
     if run_sharpe < 0.0 and overall_sharpe > 0.0:
         warnings.append("Held-out Sharpe is negative while walk-forward mean Sharpe is positive.")
+    if run_sharpe < 0.0 and overall_sharpe < 0.0:
+        warnings.append("Held-out and walk-forward Sharpe are both negative; strategy is not yet investment-ready.")
 
     return {
         "held_out_vs_walk_forward": {

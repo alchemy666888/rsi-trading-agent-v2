@@ -169,7 +169,7 @@ def compute_indicator_bundle(
 
 def build_multi_timeframe_features(source_df: pl.DataFrame, every: str, prefix: str) -> pl.DataFrame:
     resampled = (
-        source_df.group_by_dynamic("dt", every=every, period=every, closed="right", label="right")
+        source_df.group_by_dynamic("dt", every=every, period=every, closed="left", label="left")
         .agg(
             [
                 pl.col("open").first().alias("open"),
@@ -203,6 +203,12 @@ def build_multi_timeframe_features(source_df: pl.DataFrame, every: str, prefix: 
         ]
         + tf_features
     )
+
+    feature_cols = [col for col in resampled.columns if col.startswith(prefix)]
+    if feature_cols:
+        # Force strict backward-looking joins: at base bar t we only expose
+        # higher-timeframe features from completed buckets strictly before t.
+        resampled = resampled.with_columns([pl.col(col).shift(1).alias(col) for col in feature_cols])
 
     return resampled.select(["dt"] + [col for col in resampled.columns if col.startswith(prefix)])
 

@@ -151,12 +151,26 @@ def build_dataset_metadata(feature_df: pl.DataFrame, source_mode: str, source_re
     return payload
 
 
+def _required_embargo_gap(config: dict[str, Any]) -> int:
+    feature_cfg = config.get("features", {})
+    walk_cfg = config.get("walk_forward", {})
+    max_feature_lag = int(feature_cfg.get("max_lag_bars", 60))
+    purge_bars = int(walk_cfg.get("purge_bars", 5))
+    # Label horizon is one bar (target_up uses close.shift(-1)).
+    return max(purge_bars, max_feature_lag + 1)
+
+
 def compute_split_metadata(config: dict[str, Any], total_rows: int) -> SplitMetadata:
     split_cfg = config.get("splits", {})
+    walk_cfg = config.get("walk_forward", {})
+    feature_cfg = config.get("features", {})
     warmup_bars = int(config["runtime"].get("warmup_bars", 200))
     train_ratio = float(split_cfg.get("train_ratio", 0.6))
     validation_ratio = float(split_cfg.get("validation_ratio", 0.2))
     minimum_oos_bars = int(split_cfg.get("minimum_oos_bars", 100))
+    purge_bars = int(walk_cfg.get("purge_bars", 5))
+    max_feature_lag = int(feature_cfg.get("max_lag_bars", 60))
+    required_embargo_gap = _required_embargo_gap(config)
 
     train_end = int(total_rows * train_ratio)
     validation_end = int(total_rows * (train_ratio + validation_ratio))
@@ -164,7 +178,7 @@ def compute_split_metadata(config: dict[str, Any], total_rows: int) -> SplitMeta
     train_end = max(train_end, warmup_bars + 50)
     validation_end = max(validation_end, train_end + 50)
     validation_end = min(validation_end, total_rows - minimum_oos_bars)
-    oos_start = max(validation_end, warmup_bars)
+    oos_start = max(validation_end + required_embargo_gap, warmup_bars)
     oos_end = min(total_rows - 1, oos_start + int(config["runtime"]["max_cycles"]))
 
     if oos_start >= total_rows - 2:
@@ -177,4 +191,7 @@ def compute_split_metadata(config: dict[str, Any], total_rows: int) -> SplitMeta
         "validation_end": validation_end,
         "oos_start": oos_start,
         "oos_end": min(total_rows - 1, max(oos_end, oos_start + 2)),
+        "purge_bars": purge_bars,
+        "max_feature_lag": max_feature_lag,
+        "required_embargo_gap": required_embargo_gap,
     }

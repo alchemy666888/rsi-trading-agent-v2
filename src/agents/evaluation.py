@@ -88,6 +88,7 @@ def simulate_policy(
     initial_equity: float,
     slippage_bps: float,
     timestamp: np.ndarray | None = None,
+    signal_delay_bars: int = 1,
     timeframe: str = "15m",
 ) -> dict[str, Any]:
     if close.shape[0] < 2:
@@ -112,6 +113,8 @@ def simulate_policy(
     stop_loss_pct = float(risk_cfg.get("stop_loss_pct", 0.0))
     take_profit_pct = float(risk_cfg.get("take_profit_pct", 0.0))
     block_high_volatility = bool(risk_cfg.get("block_high_volatility", False))
+    delay_bars = max(0, int(signal_delay_bars))
+    scheduled_actions: dict[int, tuple[int, int, int]] = {}
 
     for idx in range(len(close) - 1):
         current_close = float(close[idx])
@@ -128,7 +131,19 @@ def simulate_policy(
             if take_profit_pct > 0.0 and pnl_pct >= take_profit_pct:
                 desired_position = 0
 
-        target_position = apply_turnover_limit(position, desired_position, max_turnover_per_bar)
+        apply_idx = idx + delay_bars
+        if apply_idx < len(close) - 1:
+            signal_ts = int(timestamp[idx]) if timestamp is not None else idx
+            scheduled_actions[apply_idx] = (desired_position, idx, signal_ts)
+
+        target_position = position
+        scheduled = scheduled_actions.pop(idx, None)
+        signal_idx = idx
+        signal_timestamp = int(timestamp[idx]) if timestamp is not None else idx
+        if scheduled is not None:
+            scheduled_position, signal_idx, signal_timestamp = scheduled
+            target_position = apply_turnover_limit(position, scheduled_position, max_turnover_per_bar)
+
         transaction_cost = slippage * abs(target_position - position)
         next_close = float(close[idx + 1])
         market_return = (next_close - current_close) / current_close
@@ -138,12 +153,16 @@ def simulate_policy(
         equity_curve.append(equity)
 
         if target_position != position:
-            event_timestamp = int(timestamp[idx]) if timestamp is not None else idx
+            execution_timestamp = int(timestamp[idx + 1]) if timestamp is not None else (idx + 1)
             action = "LONG" if target_position > 0 else "SHORT" if target_position < 0 else "FLAT"
             trades.append(
                 {
                     "bar_index": idx,
-                    "timestamp": event_timestamp,
+                    "signal_bar_index": signal_idx,
+                    "execution_bar_index": idx + 1,
+                    "signal_timestamp": signal_timestamp,
+                    "execution_timestamp": execution_timestamp,
+                    "timestamp": execution_timestamp,
                     "action": action,
                     "from_position": position,
                     "to_position": target_position,
@@ -174,6 +193,7 @@ def calibrate_thresholds(
     timestamps = validation_df["timestamp"].to_numpy()
     initial_equity = float(sim_cfg["initial_equity"])
     slippage_bps = float(sim_cfg["slippage_bps"])
+    signal_delay_bars = int(sim_cfg.get("signal_delay_bars", 1))
 
     def objective(trial: optuna.Trial) -> float:
         params = {
@@ -182,7 +202,18 @@ def calibrate_thresholds(
         }
         if params["short_threshold"] >= params["long_threshold"]:
             return -10.0
-        result = simulate_policy(close, probs, regime, params, risk_cfg, initial_equity, slippage_bps, timestamps, timeframe=timeframe)
+        result = simulate_policy(
+            close,
+            probs,
+            regime,
+            params,
+            risk_cfg,
+            initial_equity,
+            slippage_bps,
+            timestamps,
+            signal_delay_bars=signal_delay_bars,
+            timeframe=timeframe,
+        )
         return float(result["metrics"]["sharpe"])
 
     study = optuna.create_study(direction="maximize")
@@ -253,6 +284,7 @@ def run_walk_forward_backtest(
     timeframe = config.get("asset", {}).get("timeframe", "15m")
     initial_equity = float(sim_cfg["initial_equity"])
     slippage_bps = float(sim_cfg["slippage_bps"])
+    signal_delay_bars = int(sim_cfg.get("signal_delay_bars", 1))
 
     def run_mode(mode: str) -> dict[str, Any]:
         folds = build_walk_forward_folds(config, split_metadata, data.height, mode)
@@ -285,6 +317,7 @@ def run_walk_forward_backtest(
                 initial_equity,
                 slippage_bps,
                 test_df["timestamp"].to_numpy(),
+                signal_delay_bars=signal_delay_bars,
                 timeframe=timeframe,
             )
             fold_results.append(
