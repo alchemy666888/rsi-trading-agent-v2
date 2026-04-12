@@ -1,0 +1,32 @@
+Traceback (most recent call last):
+  File "/Users/antee/Documents/projects/rsi-trading-agent-v2/run_mvp.py", line 261, in main
+    initial_state = prepare_experiment(
+                    ^^^^^^^^^^^^^^^^^^^
+  File "/Users/antee/Documents/projects/rsi-trading-agent-v2/src/agents/setup.py", line 32, in prepare_experiment
+    historical_data, dataset_metadata = load_historical_data(config)
+                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/antee/Documents/projects/rsi-trading-agent-v2/src/agents/data.py", line 125, in load_historical_data
+    raw_df = _read_snapshot(snapshot_path)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/antee/Documents/projects/rsi-trading-agent-v2/src/agents/data.py", line 39, in _read_snapshot
+    return pl.read_parquet(snapshot_path)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/antee/Documents/projects/rsi-trading-agent-v2/.venv/lib/python3.11/site-packages/polars/_utils/deprecation.py", line 128, in wrapper
+    return function(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/antee/Documents/projects/rsi-trading-agent-v2/.venv/lib/python3.11/site-packages/polars/_utils/deprecation.py", line 128, in wrapper
+    return function(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/antee/Documents/projects/rsi-trading-agent-v2/.venv/lib/python3.11/site-packages/polars/io/parquet/functions.py", line 293, in read_parquet
+    return lf.collect()
+           ^^^^^^^^^^^^
+  File "/Users/antee/Documents/projects/rsi-trading-agent-v2/.venv/lib/python3.11/site-packages/polars/_utils/deprecation.py", line 97, in wrapper
+    return function(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/antee/Documents/projects/rsi-trading-agent-v2/.venv/lib/python3.11/site-packages/polars/lazyframe/opt_flags.py", line 326, in wrapper
+    return function(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/antee/Documents/projects/rsi-trading-agent-v2/.venv/lib/python3.11/site-packages/polars/lazyframe/frame.py", line 2464, in collect
+    return wrap_df(ldf.collect(engine, callback))
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: No such file or directory (os error 2): snapshots/btcusdt_15m.parquet

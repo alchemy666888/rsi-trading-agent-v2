@@ -1,0 +1,13 @@
+{
+  "cursor": null,
+  "position": null,
+  "target_position": null,
+  "equity": null,
+  "last_action": null,
+  "current_bar_timestamp": null,
+  "current_close": null,
+  "prediction": null,
+  "risk_status": null,
+  "returns_count": 0,
+  "transition_count": 0
+}

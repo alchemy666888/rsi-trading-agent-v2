@@ -1,0 +1,24 @@
+{
+  "validation_sharpe": -15.649301762325011,
+  "walk_forward_mean_sharpe": -57.33091421272165,
+  "held_out_sharpe": -8.848426214877701,
+  "bad_research_performance": {
+    "triple_negative_sharpe": true
+  },
+  "engineering_validity": {
+    "execution_semantics_consistent": true,
+    "kpi_schema_consistent": true,
+    "engineering_blockers": []
+  },
+  "evidence_sufficiency": {
+    "snapshot_based": true,
+    "walk_forward_sufficient": true,
+    "evidence_blockers": []
+  },
+  "hard_blockers": [],
+  "phase_gate_decision": "advance",
+  "fine_tuning_gate_open": true,
+  "warnings": [
+    "Validation Sharpe, walk-forward mean Sharpe, and held-out Sharpe are all negative."
+  ]
+}

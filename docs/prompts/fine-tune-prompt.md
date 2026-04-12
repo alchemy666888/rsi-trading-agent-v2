@@ -12,7 +12,7 @@ Mandatory working instruction:
 Read the repository carefully and do not start to work until you have traced all timeframe-sensitive logic end-to-end.
 
 Additional mandatory instruction:
-Read the repository carefully and do not answer until you have traced all source code and report files under "artifacts/20260412T021248Z-28c8f154".
+Read the repository carefully and do not answer until you have traced all source code and report files under "artifacts/20260412T033624Z-12c4a163".
 
 You must review:
 1. docs/development-plan.md
@@ -26,7 +26,7 @@ You must review:
 9. src/agents/nodes.py
 10. src/agents/graph.py
 11. tests/test_pipeline.py
-12. artifacts/20260412T021248Z-28c8f154/*
+12. artifacts/20260412T033624Z-12c4a163/*
    especially:
    - report.md
    - benchmark_metrics.json
@@ -58,7 +58,7 @@ Important review context:
   - clear benchmark regression tracking
 
 Current run to assess:
-- Run ID: 20260412T021248Z-28c8f154
+- Run ID: 20260412T033624Z-12c4a163
 - Asset/timeframe: BTC/USDT (15m)
 - Dataset source: exchange:binance
 - Dataset span: 2026-04-01T02:00:00Z to 2026-04-11T11:45:00Z
@@ -205,7 +205,7 @@ For each finding include:
 - whether it blocks phase advancement
 
 # 6. Evidence From Current Run Artifacts
-Interpret the artifacts under artifacts/20260412T021248Z-28c8f154 carefully.
+Interpret the artifacts under artifacts/20260412T033624Z-12c4a163 carefully.
 Discuss:
 - what the strongly negative validation, walk-forward, and held-out metrics imply
 - whether the current implementation is behaving consistently even if performance is bad
