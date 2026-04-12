@@ -7,7 +7,7 @@ import numpy as np
 import optuna
 import polars as pl
 
-from agents.modeling import build_lgbm_params
+from agents.modeling import build_lgbm_params, build_training_arrays_no_leakage
 from agents.modeling import derive_shap_rule as derive_shap_rule_from_model
 from agents.risk import apply_turnover_limit, clamp_position
 import lightgbm as lgb
@@ -126,26 +126,36 @@ def simulate_policy(
     stop_loss_pct = float(risk_cfg.get("stop_loss_pct", 0.0))
     take_profit_pct = float(risk_cfg.get("take_profit_pct", 0.0))
     block_high_volatility = bool(risk_cfg.get("block_high_volatility", False))
+    pause_drawdown = float(risk_cfg.get("max_drawdown_pause", 1.0))
     delay_bars = max(0, int(signal_delay_bars))
     funding_rate = max(0.0, float(funding_rate_per_8h))
     tf_minutes = TIMEFRAME_MINUTES.get(timeframe, 15)
     funding_interval_bars = max(1, int(8 * 60 / tf_minutes))
     scheduled_actions: dict[int, tuple[int, int, int]] = {}
+    peak_equity = float(initial_equity)
+    max_drawdown_seen = 0.0
 
     for idx in range(len(close) - 1):
         current_close = float(close[idx])
         desired_position = choose_position(float(probs[idx]), long_threshold, short_threshold)
         desired_position = clamp_position(desired_position, max_abs_position)
+        if peak_equity > 1e-12:
+            drawdown_now = max(0.0, 1.0 - (equity / peak_equity))
+            max_drawdown_seen = max(max_drawdown_seen, drawdown_now)
 
-        if block_high_volatility and int(volatility_regime[idx]) >= 1:
+        pause_activated = max_drawdown_seen >= pause_drawdown
+        if pause_activated:
             desired_position = 0
+        else:
+            if block_high_volatility and int(volatility_regime[idx]) >= 1:
+                desired_position = 0
 
-        if position != 0 and entry_price is not None:
-            pnl_pct = ((current_close / entry_price) - 1.0) if position > 0 else ((entry_price / current_close) - 1.0)
-            if stop_loss_pct > 0.0 and pnl_pct <= -stop_loss_pct:
-                desired_position = 0
-            if take_profit_pct > 0.0 and pnl_pct >= take_profit_pct:
-                desired_position = 0
+            if position != 0 and entry_price is not None:
+                pnl_pct = ((current_close / entry_price) - 1.0) if position > 0 else ((entry_price / current_close) - 1.0)
+                if stop_loss_pct > 0.0 and pnl_pct <= -stop_loss_pct:
+                    desired_position = 0
+                if take_profit_pct > 0.0 and pnl_pct >= take_profit_pct:
+                    desired_position = 0
 
         apply_idx = idx + delay_bars
         if apply_idx < len(close) - 1:
@@ -217,12 +227,19 @@ def simulate_policy(
                 entry_cycle = len(returns)
                 entry_timestamp = execution_timestamp
         position = target_position
+        peak_equity = max(peak_equity, equity)
+        if peak_equity > 1e-12:
+            drawdown_after_bar = max(0.0, 1.0 - (equity / peak_equity))
+            max_drawdown_seen = max(max_drawdown_seen, drawdown_after_bar)
+        if pause_activated:
+            break
 
     return {
         "returns": returns,
         "equity_curve": equity_curve,
         "trades": trades,
         "completed_trades": completed_trades,
+        "paused": max_drawdown_seen >= pause_drawdown,
         "metrics": compute_run_metrics(
             returns,
             equity_curve,
@@ -356,8 +373,12 @@ def run_walk_forward_backtest(
             if min(train_df.height, validation_df.height, test_df.height) < 20:
                 continue
 
-            x_train = train_df.select(feature_cols).to_numpy()
-            y_train = train_df["target_up"].to_numpy().astype(int)
+            x_train, y_train = build_training_arrays_no_leakage(
+                feature_df=data,
+                feature_cols=feature_cols,
+                start_idx=int(fold["train_start"]),
+                end_idx=int(fold["train_end"]),
+            )
             if np.unique(y_train).size < 2:
                 y_train[-1] = 1 - y_train[-1]
 

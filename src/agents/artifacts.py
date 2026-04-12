@@ -114,6 +114,7 @@ def build_report_payload(state: AgentState) -> dict[str, Any]:
     returns = [float(value) for value in state.get("returns", [])]
     equity_curve = [float(value) for value in state.get("equity_curve", [])]
     initial_equity = _safe_float(config.get("simulation", {}).get("initial_equity"), default=1.0)
+    timeframe = str(config.get("asset", {}).get("timeframe", "15m"))
     split_counts = dict(run_metadata.get("split_counts", {}))
     if not split_counts:
         split_counts = {
@@ -135,7 +136,12 @@ def build_report_payload(state: AgentState) -> dict[str, Any]:
         run_metrics.get("completed_trade_win_rate", trade_summary.get("win_rate", 0.0))
     )
     exposure_stats = compute_exposure_stats(decision_log)
-    equity_diagnostics = compute_equity_curve_diagnostics(returns, equity_curve, initial_equity)
+    equity_diagnostics = compute_equity_curve_diagnostics(
+        returns,
+        equity_curve,
+        initial_equity,
+        timeframe=timeframe,
+    )
     event_counts = count_events_by_type(event_log)
     benchmark_comparison = compare_benchmark_metrics(run_metrics, benchmark_metrics)
     pause_durations = _compute_pause_durations_seconds(event_log)
@@ -159,6 +165,9 @@ def build_report_payload(state: AgentState) -> dict[str, Any]:
     data_quality_notes.append(
         "Execution convention: signal observed at close(t), executed at close(t + delay), "
         "position earns returns from close(t + delay) to close(t + delay + 1)."
+    )
+    data_quality_notes.append(
+        "Risk checks (drawdown pause, volatility block, stop-loss, take-profit) are evaluated at signal time."
     )
     data_quality_notes.append(
         f"Slippage assumption (bps): {_safe_float(config.get('simulation', {}).get('slippage_bps')):.2f}."

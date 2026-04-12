@@ -5,6 +5,18 @@ from typing import Any
 
 import numpy as np
 
+TIMEFRAME_MINUTES: dict[str, int] = {
+    "1m": 1,
+    "3m": 3,
+    "5m": 5,
+    "15m": 15,
+    "30m": 30,
+    "1h": 60,
+    "2h": 120,
+    "4h": 240,
+    "1d": 1440,
+}
+
 
 def count_events_by_type(events: list[dict[str, Any]]) -> dict[str, int]:
     counter = Counter(str(event.get("event_type", "unknown")) for event in events if isinstance(event, dict))
@@ -60,10 +72,13 @@ def compute_equity_curve_diagnostics(
     returns: list[float],
     equity_curve: list[float],
     initial_equity: float,
+    timeframe: str = "15m",
 ) -> dict[str, Any]:
     drawdown_episodes = extract_drawdown_episodes(equity_curve, initial_equity)
     returns_array = np.asarray(returns, dtype=float)
-    annualized_vol = float(returns_array.std(ddof=1) * np.sqrt(365 * 24 * 60)) if returns_array.size > 1 else 0.0
+    tf_minutes = TIMEFRAME_MINUTES.get(timeframe, 15)
+    bars_per_year = 365 * 24 * 60 / tf_minutes
+    annualized_vol = float(returns_array.std(ddof=1) * np.sqrt(bars_per_year)) if returns_array.size > 1 else 0.0
 
     return {
         "bars": len(returns),

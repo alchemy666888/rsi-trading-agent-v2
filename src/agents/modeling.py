@@ -58,10 +58,12 @@ def train_lightgbm_baseline(
     feature_cols = get_model_feature_columns(feature_df)
     train_start = int(split_metadata["train_start"])
     train_end = int(split_metadata["train_end"])
-
-    train_df = feature_df.slice(train_start, train_end - train_start)
-    x_train = train_df.select(feature_cols).to_numpy()
-    y_train = train_df["target_up"].to_numpy().astype(int)
+    x_train, y_train = build_training_arrays_no_leakage(
+        feature_df=feature_df,
+        feature_cols=feature_cols,
+        start_idx=train_start,
+        end_idx=train_end,
+    )
 
     if np.unique(y_train).size < 2:
         y_train[-1] = 1 - y_train[-1]
@@ -78,10 +80,31 @@ def train_lightgbm_baseline(
     LOGGER.info(
         "LightGBM baseline trained on rows [%s, %s) with %s features.",
         train_start,
-        train_end,
+        train_start + int(y_train.shape[0]),
         len(feature_cols),
     )
     return model, feature_cols, feature_importances
+
+
+def build_training_arrays_no_leakage(
+    feature_df: pl.DataFrame,
+    feature_cols: list[str],
+    start_idx: int,
+    end_idx: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    window_length = max(0, int(end_idx) - int(start_idx))
+    if window_length < 2:
+        raise ValueError(
+            f"Training window must contain at least 2 rows to build one-step directional labels. Got {window_length}."
+        )
+
+    train_df = feature_df.slice(int(start_idx), window_length)
+    close = train_df["close"].to_numpy().astype(float)
+    # Compute labels inside the train window so no label can depend on a close
+    # from the next split/fold segment.
+    y_train = (close[1:] > close[:-1]).astype(int)
+    x_train = train_df.select(feature_cols).slice(0, train_df.height - 1).to_numpy()
+    return x_train, y_train
 
 
 def predict_probability(row: dict[str, Any], model: Any, feature_columns: list[str]) -> float:

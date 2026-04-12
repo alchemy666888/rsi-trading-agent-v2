@@ -25,8 +25,9 @@ from agents.evaluation import (
     simulate_policy,
 )
 from agents.features import build_features
-from agents.metrics_utils import compare_benchmark_metrics
-from agents.nodes import data_node, decision_node, evaluate_node, runtime_config_node
+from agents.metrics_utils import compare_benchmark_metrics, compute_equity_curve_diagnostics
+from agents.modeling import train_lightgbm_baseline
+from agents.nodes import data_node, decision_node, evaluate_node, risk_node, runtime_config_node
 from agents.risk import evaluate_risk
 from run_mvp import evaluate_readiness
 
@@ -225,6 +226,208 @@ class PipelineTests(unittest.TestCase):
             split_metadata["oos_start"],
             split_metadata["validation_end"] + max(split_metadata["purge_bars"], split_metadata["required_embargo_gap"]),
         )
+
+    def test_train_lightgbm_baseline_avoids_split_boundary_label_leakage(self) -> None:
+        feature_df = pl.DataFrame(
+            {
+                "timestamp": [1, 2, 3, 4],
+                "dt": [1, 2, 3, 4],
+                "close": [1.0, 2.0, 1.0, 100.0],
+                # Row index 2 would leak a label from validation if used.
+                "target_up": [1, 0, 1, 0],
+            }
+        )
+        split_metadata = {"train_start": 0, "train_end": 3}
+        captured: dict[str, np.ndarray] = {}
+
+        class _DummyBooster:
+            def feature_importance(self, importance_type: str = "gain") -> np.ndarray:
+                return np.array([1.0], dtype=float)
+
+        class _DummyLGBMClassifier:
+            def __init__(self, **kwargs):
+                self.booster_ = _DummyBooster()
+
+            def fit(self, x: np.ndarray, y: np.ndarray) -> None:
+                captured["x"] = np.asarray(x)
+                captured["y"] = np.asarray(y)
+
+        with patch("agents.modeling.lgb.LGBMClassifier", _DummyLGBMClassifier):
+            train_lightgbm_baseline(feature_df, split_metadata, build_test_config())
+
+        self.assertIn("x", captured)
+        self.assertIn("y", captured)
+        self.assertEqual(int(captured["x"].shape[0]), 2)
+        self.assertEqual(captured["y"].tolist(), [1, 0])
+
+    def test_walk_forward_training_avoids_fold_boundary_label_leakage(self) -> None:
+        rows = 300
+        data = pl.DataFrame(
+            {
+                "timestamp": np.arange(1_700_000_000_000, 1_700_000_000_000 + rows, dtype=np.int64),
+                "close": np.linspace(100.0, 200.0, rows, dtype=float),
+                "volatility_regime": np.zeros(rows, dtype=int),
+            }
+        )
+        config = build_test_config()
+        config["walk_forward"].update(
+            {
+                "train_bars": 60,
+                "validation_bars": 20,
+                "test_bars": 20,
+                "step_bars": 20,
+                "purge_bars": 5,
+            }
+        )
+        split_metadata = {
+            "train_start": 0,
+            "train_end": 180,
+            "validation_start": 180,
+            "validation_end": 220,
+            "oos_start": 260,
+            "oos_end": 299,
+            "purge_bars": 5,
+            "max_feature_lag": 16,
+            "required_embargo_gap": 17,
+        }
+        trained_rows: list[int] = []
+
+        class _DummyLGBMClassifier:
+            def __init__(self, **kwargs):
+                self.booster_ = None
+
+            def fit(self, x: np.ndarray, y: np.ndarray) -> None:
+                trained_rows.append(int(np.asarray(x).shape[0]))
+
+            def predict_proba(self, x: np.ndarray) -> np.ndarray:
+                arr = np.asarray(x)
+                return np.column_stack(
+                    [
+                        np.full(arr.shape[0], 0.3, dtype=float),
+                        np.full(arr.shape[0], 0.7, dtype=float),
+                    ]
+                )
+
+        with patch("agents.evaluation.lgb.LGBMClassifier", _DummyLGBMClassifier), patch(
+            "agents.evaluation.calibrate_thresholds",
+            return_value=(
+                {"long_threshold": 0.6, "short_threshold": 0.4},
+                {"split": "validation", "objective_name": "validation_sharpe", "objective_value": 0.0},
+            ),
+        ), patch(
+            "agents.evaluation.simulate_policy",
+            return_value={
+                "returns": [],
+                "equity_curve": [],
+                "trades": [],
+                "metrics": {"sharpe": 0.0, "max_drawdown": 0.0, "total_return": 0.0, "bar_win_rate": 0.0},
+            },
+        ):
+            benchmark = run_walk_forward_backtest(data, feature_cols=["close"], config=config, split_metadata=split_metadata)
+
+        expected_rows = [
+            (int(fold["train_end"]) - int(fold["train_start"]) - 1)
+            for fold in [*benchmark["expanding"]["folds"], *benchmark["rolling"]["folds"]]
+        ]
+        self.assertTrue(expected_rows)
+        self.assertEqual(trained_rows, expected_rows)
+
+    def test_simulate_policy_drawdown_pause_matches_runtime(self) -> None:
+        close = np.array([100.0, 90.0, 80.0, 70.0, 60.0], dtype=float)
+        probs = np.array([0.9, 0.9, 0.9, 0.9, 0.9], dtype=float)
+        volatility_regime = np.zeros_like(close, dtype=int)
+        timestamps = np.array([1, 2, 3, 4, 5], dtype=int)
+        strategy_params = {"long_threshold": 0.6, "short_threshold": 0.4}
+        config = build_test_config()
+        config["simulation"]["signal_delay_bars"] = 0
+        config["simulation"]["slippage_bps"] = 0.0
+        config["risk"]["max_drawdown_pause"] = 0.05
+        config["risk"]["block_high_volatility"] = False
+        config["risk"]["stop_loss_pct"] = 0.0
+        config["risk"]["take_profit_pct"] = 0.0
+
+        simulation = simulate_policy(
+            close=close,
+            probs=probs,
+            volatility_regime=volatility_regime,
+            strategy_params=strategy_params,
+            risk_cfg=config["risk"],
+            initial_equity=10000.0,
+            slippage_bps=0.0,
+            timestamp=timestamps,
+            signal_delay_bars=0,
+            funding_rate_per_8h=0.0,
+            timeframe="15m",
+        )
+        self.assertTrue(simulation["paused"])
+
+        runtime_state = {
+            "config": config,
+            "historical_data": pl.DataFrame({"timestamp": timestamps, "close": close}),
+            "split_metadata": {"oos_end": len(close) - 1},
+            "cursor": 0,
+            "done": False,
+            "paused": False,
+            "position": 0,
+            "target_position": 0,
+            "proposed_position": 0,
+            "pending_signals": [],
+            "applied_signal": None,
+            "signal_delay_bars_runtime": 0,
+            "entry_price": None,
+            "entry_cycle": None,
+            "entry_timestamp": None,
+            "last_action": "HOLD",
+            "strategy_params": strategy_params,
+            "prediction": {
+                "prob_up": 0.5,
+                "regime": "normal",
+                "signal_timestamp": 0,
+                "execution_timestamp": 0,
+                "source_model": "unit_test",
+            },
+            "current_row": {"timestamp": int(timestamps[0]), "close": float(close[0]), "rsi_14": 50.0},
+            "risk_status": {
+                "paused": False,
+                "reasons": [],
+                "stop_triggered": False,
+                "take_profit_triggered": False,
+                "blocked_high_volatility": False,
+            },
+            "returns": [],
+            "equity_curve": [],
+            "trades": [],
+            "trade_history_buffer": [],
+            "completed_trades": [],
+            "decision_log": [],
+            "equity": 10000.0,
+            "performance": {"run_metrics": {}, "benchmark_metrics": {}},
+        }
+
+        for idx in range(len(close) - 1):
+            runtime_state["cursor"] = idx
+            runtime_state["current_row"] = {
+                "timestamp": int(timestamps[idx]),
+                "close": float(close[idx]),
+                "rsi_14": 50.0,
+            }
+            runtime_state["prediction"] = {
+                "prob_up": float(probs[idx]),
+                "regime": "normal",
+                "signal_timestamp": int(timestamps[idx]),
+                "execution_timestamp": int(timestamps[idx]),
+                "source_model": "unit_test",
+            }
+            runtime_state.update(risk_node(runtime_state))
+            runtime_state.update(decision_node(runtime_state))
+            runtime_state.update(evaluate_node(runtime_state))
+            if bool(runtime_state.get("paused", False)):
+                break
+
+        self.assertEqual(len(simulation["returns"]), len(runtime_state["returns"]))
+        self.assertTrue(np.allclose(simulation["returns"], runtime_state["returns"], atol=1e-12))
+        self.assertTrue(np.allclose(simulation["equity_curve"], runtime_state["equity_curve"], atol=1e-9))
+        self.assertEqual(len(simulation["trades"]), len(runtime_state["trades"]))
 
     def test_signal_delay_shift_execution_timestamp_and_changes_return(self) -> None:
         close = pl.Series("close", [100.0, 110.0, 100.0, 110.0, 100.0]).to_numpy()
@@ -561,6 +764,32 @@ class PipelineTests(unittest.TestCase):
         metadata = compute_split_metadata(config, total_rows=1200)
         self.assertEqual(metadata["max_feature_lag"], config["features"]["max_lag_bars"])
         self.assertGreaterEqual(metadata["required_embargo_gap"], metadata["purge_bars"])
+
+    def test_split_metadata_snapshot_for_1000_bars_matches_expected_counts(self) -> None:
+        config = build_test_config()
+        config["runtime"]["warmup_bars"] = 240
+        config["splits"]["minimum_oos_bars"] = 200
+        config["features"]["max_lag_bars"] = 16
+        config["walk_forward"]["purge_bars"] = 5
+        metadata = compute_split_metadata(config, total_rows=1000)
+        self.assertEqual(metadata["train_end"], 600)
+        self.assertEqual(metadata["validation_end"], 800)
+        self.assertEqual(metadata["required_embargo_gap"], 17)
+        self.assertEqual(metadata["oos_start"], 817)
+        self.assertEqual(metadata["oos_end"], 999)
+        self.assertEqual(metadata["oos_end"] - metadata["oos_start"], 182)
+
+    def test_equity_curve_diagnostics_respect_timeframe(self) -> None:
+        returns = [0.01, -0.02, 0.015, -0.005]
+        equity_curve = [10100.0, 9898.0, 10046.47, 9996.23765]
+        diag_1m = compute_equity_curve_diagnostics(returns, equity_curve, 10000.0, timeframe="1m")
+        diag_15m = compute_equity_curve_diagnostics(returns, equity_curve, 10000.0, timeframe="15m")
+        self.assertGreater(diag_1m["annualized_volatility"], diag_15m["annualized_volatility"])
+        self.assertAlmostEqual(
+            float(diag_1m["annualized_volatility"]) / float(diag_15m["annualized_volatility"]),
+            float(np.sqrt(15.0)),
+            places=10,
+        )
 
     def test_compare_benchmark_metrics_warns_on_negative_sharpe_pair(self) -> None:
         out = compare_benchmark_metrics(
