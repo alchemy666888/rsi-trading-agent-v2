@@ -27,9 +27,11 @@ class RiskStatus(TypedDict):
 class RunMetrics(TypedDict):
     sharpe: float
     max_drawdown: float
-    win_rate: float
     total_return: float
-    trade_count: int
+    bar_win_rate: float
+    transition_count: int
+    completed_trade_win_rate: float
+    completed_trade_count: int
 
 
 class Performance(TypedDict):
@@ -94,6 +96,7 @@ class AgentState(TypedDict, total=False):
     trade_history_buffer: list[dict[str, Any]]
     completed_trades: list[dict[str, Any]]
     decision_log: list[dict[str, Any]]
+    cycle_count: int
 
     strategy_params: dict[str, float]
     optimization_events: list[dict[str, Any]]

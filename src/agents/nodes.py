@@ -79,7 +79,9 @@ def predict_node(state: AgentState) -> AgentState:
     delay_bars = max(0, int(state.get("signal_delay_bars_runtime", 0)))
     prob_up = predict_probability(row, state.get("lightgbm_model"), state.get("feature_columns", []))
     regime = "high_volatility" if float(row.get("volatility_regime", 0.0)) >= 0.5 else "normal"
-    execution_index = min(cursor + delay_bars + 1, historical_data.height - 1)
+    # Execution happens at the close of bar t + delay, and exposure starts for
+    # the following bar return. Keep execution index on an executable bar.
+    execution_index = min(cursor + delay_bars, max(0, historical_data.height - 2))
     next_timestamp = int(historical_data["timestamp"][execution_index])
     prediction = {
         "prob_up": prob_up,
@@ -92,7 +94,7 @@ def predict_node(state: AgentState) -> AgentState:
         state,
         stage="predict",
         event_type="prediction_generated",
-        message="Prediction generated for next execution bar.",
+        message="Prediction generated for delayed execution bar.",
         prediction=prediction,
     )
     return {"prediction": prediction}
@@ -209,10 +211,10 @@ def decision_node(state: AgentState) -> AgentState:
             target_position = apply_turnover_limit(current_position, raw_target_position, max_turnover_per_bar)
             historical_data = state.get("historical_data")
             if historical_data is not None and hasattr(historical_data, "height"):
-                execution_idx = min(cursor + 1, historical_data.height - 1)
+                execution_idx = min(cursor, historical_data.height - 1)
                 execution_timestamp = int(historical_data["timestamp"][execution_idx])
             else:
-                execution_timestamp = cursor + 1
+                execution_timestamp = cursor
             applied_signal = {
                 "signal_cursor": int(signal.get("signal_cursor", cursor)),
                 "signal_timestamp": int(signal.get("signal_timestamp", state.get("prediction", {}).get("signal_timestamp", cursor))),
@@ -253,6 +255,7 @@ def _build_completed_trade(
     *,
     current_position: int,
     close_now: float,
+    close_timestamp: int,
     returns_length: int,
 ) -> dict[str, Any]:
     entry_cycle = state.get("entry_cycle")
@@ -262,7 +265,7 @@ def _build_completed_trade(
         "open_cycle": state.get("entry_cycle"),
         "close_cycle": returns_length,
         "open_timestamp": state.get("entry_timestamp"),
-        "close_timestamp": state.get("prediction", {}).get("execution_timestamp"),
+        "close_timestamp": close_timestamp,
         "entry_price": state.get("entry_price"),
         "exit_price": close_now,
         "pnl_pct": _compute_realized_pnl_pct(current_position, state.get("entry_price"), close_now),
@@ -288,13 +291,13 @@ def evaluate_node(state: AgentState) -> AgentState:
     transaction_cost = slippage * abs(target_position - current_position)
     strategy_return = (target_position * market_return) - transaction_cost
 
-    cycle_count_current = int(state.get("cycle_count", 0)) + 1
+    cycle_count_current = len(list(state.get("returns", []))) + 1
     funding_rate = float(config["simulation"].get("funding_rate_per_8h", 0.0))
     tf_str = config.get("asset", {}).get("timeframe", "15m")
     tf_minutes = TIMEFRAME_MINUTES.get(tf_str, 15)
     funding_interval_bars = max(1, int(8 * 60 / tf_minutes))
-    if funding_rate > 0.0 and cycle_count_current % funding_interval_bars == 0 and current_position != 0:
-        strategy_return -= abs(current_position) * funding_rate
+    if funding_rate > 0.0 and cycle_count_current % funding_interval_bars == 0 and target_position != 0:
+        strategy_return -= abs(target_position) * funding_rate
 
     returns = list(state.get("returns", []))
     returns.append(strategy_return)
@@ -343,6 +346,7 @@ def evaluate_node(state: AgentState) -> AgentState:
             state,
             current_position=current_position,
             close_now=close_now,
+            close_timestamp=int(state["current_row"]["timestamp"]),
             returns_length=len(returns),
         )
         realized_pnl_pct = float(completed_trade.get("pnl_pct", 0.0))
@@ -393,7 +397,14 @@ def evaluate_node(state: AgentState) -> AgentState:
 
     cycle_count = len(returns)
     performance = {
-        "run_metrics": compute_run_metrics(returns, equity_curve, initial_equity, trades, timeframe=tf_str),
+        "run_metrics": compute_run_metrics(
+            returns,
+            equity_curve,
+            initial_equity,
+            trades,
+            completed_trades=completed_trades,
+            timeframe=tf_str,
+        ),
         "benchmark_metrics": state["performance"]["benchmark_metrics"],
     }
     emit_event(
@@ -419,6 +430,7 @@ def evaluate_node(state: AgentState) -> AgentState:
         "entry_price": entry_price,
         "entry_cycle": entry_cycle,
         "entry_timestamp": entry_timestamp,
+        "cycle_count": cycle_count,
         "performance": performance,
         "done": done,
     }

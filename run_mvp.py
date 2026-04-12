@@ -98,7 +98,10 @@ def evaluate_readiness(state: AgentState) -> dict[str, Any]:
     benchmark_metrics = dict(state.get("performance", {}).get("benchmark_metrics", {}))
     overall = dict(benchmark_metrics.get("overall", {}))
     walk_forward_mean_sharpe = float(overall.get("mean_sharpe", 0.0))
-    held_out_sharpe = float(state.get("performance", {}).get("run_metrics", {}).get("sharpe", 0.0))
+    run_metrics = dict(state.get("performance", {}).get("run_metrics", {}))
+    held_out_sharpe = float(run_metrics.get("sharpe", 0.0))
+    dataset_metadata = dict(state.get("dataset_metadata", {}))
+    source_mode = str(dataset_metadata.get("source_mode", "unknown"))
 
     warnings: list[str] = []
     if validation_sharpe < 0.0 and walk_forward_mean_sharpe < 0.0 and held_out_sharpe < 0.0:
@@ -106,10 +109,104 @@ def evaluate_readiness(state: AgentState) -> dict[str, Any]:
             "Validation Sharpe, walk-forward mean Sharpe, and held-out Sharpe are all negative."
         )
 
+    required_kpi_fields = {
+        "bar_win_rate",
+        "transition_count",
+        "completed_trade_win_rate",
+        "completed_trade_count",
+    }
+    legacy_kpi_fields = {"win_rate", "trade_count"}
+    has_required_kpis = required_kpi_fields.issubset(set(run_metrics.keys()))
+    has_legacy_kpis = bool(legacy_kpi_fields.intersection(set(run_metrics.keys())))
+    transition_count_matches = int(run_metrics.get("transition_count", -1)) == len(list(state.get("trades", [])))
+    completed_trade_count_matches = int(run_metrics.get("completed_trade_count", -1)) == len(
+        list(state.get("completed_trades", []))
+    )
+    kpi_schema_consistent = (
+        has_required_kpis
+        and not has_legacy_kpis
+        and transition_count_matches
+        and completed_trade_count_matches
+    )
+
+    trade_rows = [row for row in state.get("trades", []) if isinstance(row, dict)]
+    misaligned_trade_events = 0
+    for trade in trade_rows:
+        if "bar_timestamp" not in trade or "execution_timestamp" not in trade:
+            continue
+        if int(trade.get("bar_timestamp", -1)) != int(trade.get("execution_timestamp", -2)):
+            misaligned_trade_events += 1
+    execution_semantics_consistent = misaligned_trade_events == 0
+
+    sufficiency = dict(benchmark_metrics.get("sufficiency", {}))
+    walk_forward_sufficient = bool(sufficiency.get("overall_sufficient", False))
+    snapshot_based = source_mode == "snapshot"
+
+    engineering_blockers: list[dict[str, Any]] = []
+    if not execution_semantics_consistent:
+        engineering_blockers.append(
+            {
+                "code": "execution_semantics_parity_failure",
+                "message": "Trade execution timestamps do not align with execution-bar fills.",
+                "misaligned_trade_events": misaligned_trade_events,
+            }
+        )
+    if not kpi_schema_consistent:
+        engineering_blockers.append(
+            {
+                "code": "kpi_schema_inconsistent",
+                "message": "Run metrics do not use the required explicit KPI schema.",
+                "has_required_kpis": has_required_kpis,
+                "has_legacy_kpis": has_legacy_kpis,
+                "transition_count_matches": transition_count_matches,
+                "completed_trade_count_matches": completed_trade_count_matches,
+            }
+        )
+
+    evidence_blockers: list[dict[str, Any]] = []
+    if not snapshot_based:
+        evidence_blockers.append(
+            {
+                "code": "exchange_mode_not_regression_eligible",
+                "message": "Benchmark/readiness runs must use a frozen snapshot input.",
+                "source_mode": source_mode,
+            }
+        )
+    if not walk_forward_sufficient:
+        evidence_blockers.append(
+            {
+                "code": "walk_forward_evidence_insufficient",
+                "message": "Walk-forward benchmark does not meet minimum fold/bar sufficiency.",
+                "sufficiency": sufficiency,
+            }
+        )
+
+    hard_blockers = [*engineering_blockers, *evidence_blockers]
+    if hard_blockers:
+        warnings.append(
+            "Readiness hard blockers are present; do not advance to fine-tuning or next phase."
+        )
+
     return {
         "validation_sharpe": validation_sharpe,
         "walk_forward_mean_sharpe": walk_forward_mean_sharpe,
         "held_out_sharpe": held_out_sharpe,
+        "bad_research_performance": {
+            "triple_negative_sharpe": validation_sharpe < 0.0 and walk_forward_mean_sharpe < 0.0 and held_out_sharpe < 0.0,
+        },
+        "engineering_validity": {
+            "execution_semantics_consistent": execution_semantics_consistent,
+            "kpi_schema_consistent": kpi_schema_consistent,
+            "engineering_blockers": engineering_blockers,
+        },
+        "evidence_sufficiency": {
+            "snapshot_based": snapshot_based,
+            "walk_forward_sufficient": walk_forward_sufficient,
+            "evidence_blockers": evidence_blockers,
+        },
+        "hard_blockers": hard_blockers,
+        "phase_gate_decision": "advance" if not hard_blockers else "do_not_advance",
+        "fine_tuning_gate_open": not hard_blockers,
         "warnings": warnings,
     }
 
@@ -187,7 +284,7 @@ def main() -> None:
         )
         readiness = evaluate_readiness(final_state)
         final_state["readiness"] = readiness
-        if readiness.get("warnings"):
+        if readiness.get("warnings") or readiness.get("hard_blockers"):
             event_logger.emit(
                 stage="run",
                 event_type="readiness_warning",

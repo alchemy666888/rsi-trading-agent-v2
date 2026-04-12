@@ -152,6 +152,7 @@ def prepare_experiment(
         "trade_history_buffer": [],
         "completed_trades": [],
         "decision_log": [],
+        "cycle_count": 0,
         "strategy_params": strategy_params,
         "optimization_events": [
             {
@@ -163,9 +164,11 @@ def prepare_experiment(
             "run_metrics": {
                 "sharpe": 0.0,
                 "max_drawdown": 0.0,
-                "win_rate": 0.0,
                 "total_return": 0.0,
-                "trade_count": 0,
+                "bar_win_rate": 0.0,
+                "transition_count": 0,
+                "completed_trade_win_rate": 0.0,
+                "completed_trade_count": 0,
             },
             "benchmark_metrics": benchmark_metrics,
         },

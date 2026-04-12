@@ -16,6 +16,24 @@ from agents.state import SplitMetadata
 LOGGER = logging.getLogger(__name__)
 
 
+def _hash_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while True:
+            chunk = handle.read(1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _hash_market_frame(raw_df: pl.DataFrame) -> str:
+    hash_columns = [column for column in ["timestamp", "open", "high", "low", "close", "volume", "eth_close", "eth_volume"] if column in raw_df.columns]
+    canonical = raw_df.select(hash_columns).sort("timestamp")
+    payload = json.dumps(canonical.to_dicts(), separators=(",", ":"), sort_keys=True)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 def _read_snapshot(snapshot_path: Path) -> pl.DataFrame:
     if snapshot_path.suffix == ".parquet":
         return pl.read_parquet(snapshot_path)
@@ -102,9 +120,11 @@ def load_historical_data(config: dict[str, Any]) -> tuple[pl.DataFrame, dict[str
     snapshot_cfg = config.get("snapshot", {})
     snapshot_path = Path(str(snapshot_cfg.get("path", "snapshots/btcusdt_15m.parquet")))
 
+    snapshot_hash: str | None = None
     if source_mode == "snapshot":
         raw_df = _read_snapshot(snapshot_path)
         source_ref = str(snapshot_path)
+        snapshot_hash = _hash_file(snapshot_path)
     elif source_mode == "exchange":
         raw_df = fetch_exchange_snapshot(config)
         source_ref = f"exchange:{config['asset']['exchange']}"
@@ -112,14 +132,30 @@ def load_historical_data(config: dict[str, Any]) -> tuple[pl.DataFrame, dict[str
         raise ValueError(f"Unsupported dataset source mode: {source_mode}")
 
     raw_df = raw_df.sort("timestamp")
+    raw_data_hash = _hash_market_frame(raw_df)
     feature_cfg = dict(config.get("features", {}))
     feature_cfg.setdefault("timeframe", config.get("asset", {}).get("timeframe", "15m"))
     feature_df = build_features(raw_df, feature_cfg=feature_cfg)
-    metadata = build_dataset_metadata(feature_df, source_mode=source_mode, source_ref=source_ref)
+    metadata = build_dataset_metadata(
+        feature_df,
+        source_mode=source_mode,
+        source_ref=source_ref,
+        raw_data_hash=raw_data_hash,
+        snapshot_hash=snapshot_hash,
+        snapshot_path=str(snapshot_path) if source_mode == "snapshot" else None,
+    )
     return feature_df, metadata
 
 
-def build_dataset_metadata(feature_df: pl.DataFrame, source_mode: str, source_ref: str) -> dict[str, Any]:
+def build_dataset_metadata(
+    feature_df: pl.DataFrame,
+    source_mode: str,
+    source_ref: str,
+    *,
+    raw_data_hash: str | None = None,
+    snapshot_hash: str | None = None,
+    snapshot_path: str | None = None,
+) -> dict[str, Any]:
     timestamps = feature_df["timestamp"].to_list()
     missing_values_total = 0
     missing_by_column: dict[str, int] = {}
@@ -144,6 +180,10 @@ def build_dataset_metadata(feature_df: pl.DataFrame, source_mode: str, source_re
         else None,
         "source_mode": source_mode,
         "source_ref": source_ref,
+        "raw_data_hash": raw_data_hash,
+        "snapshot_path": snapshot_path,
+        "snapshot_hash": snapshot_hash,
+        "benchmark_eligible": source_mode == "snapshot",
         "missing_values_total": missing_values_total,
         "missing_values_by_column": missing_by_column,
     }

@@ -64,7 +64,7 @@ def build_last_state_snapshot(state: dict[str, Any]) -> dict[str, Any]:
         "prediction": state.get("prediction"),
         "risk_status": state.get("risk_status"),
         "returns_count": len(state.get("returns", [])),
-        "trade_count": len(state.get("trades", [])),
+        "transition_count": len(state.get("trades", [])),
     }
 
 
@@ -128,7 +128,12 @@ def build_report_payload(state: AgentState) -> dict[str, Any]:
     split_counts.setdefault("total_bars", _safe_int(dataset_metadata.get("rows")))
 
     trade_summary = compute_trade_summary_statistics(completed_trades)
-    run_trade_count = _safe_int(run_metrics.get("trade_count", len(state.get("trades", []))))
+    run_transition_count = _safe_int(run_metrics.get("transition_count", len(state.get("trades", []))))
+    run_completed_trade_count = _safe_int(run_metrics.get("completed_trade_count", len(completed_trades)))
+    bar_win_rate = _safe_float(run_metrics.get("bar_win_rate", 0.0))
+    completed_trade_win_rate = _safe_float(
+        run_metrics.get("completed_trade_win_rate", trade_summary.get("win_rate", 0.0))
+    )
     exposure_stats = compute_exposure_stats(decision_log)
     equity_diagnostics = compute_equity_curve_diagnostics(returns, equity_curve, initial_equity)
     event_counts = count_events_by_type(event_log)
@@ -152,7 +157,14 @@ def build_report_payload(state: AgentState) -> dict[str, Any]:
         f"Feature columns available for model: {len(state.get('feature_columns', []))}."
     )
     data_quality_notes.append(
-        f"Assumed next-bar execution with slippage_bps={_safe_float(config.get('simulation', {}).get('slippage_bps')):.2f}."
+        "Execution convention: signal observed at close(t), executed at close(t + delay), "
+        "position earns returns from close(t + delay) to close(t + delay + 1)."
+    )
+    data_quality_notes.append(
+        f"Slippage assumption (bps): {_safe_float(config.get('simulation', {}).get('slippage_bps')):.2f}."
+    )
+    data_quality_notes.append(
+        f"Benchmark eligible input: {bool(dataset_metadata.get('benchmark_eligible', False))}."
     )
     for warning in readiness.get("warnings", []):
         data_quality_notes.append(f"Readiness warning: {warning}")
@@ -168,6 +180,10 @@ def build_report_payload(state: AgentState) -> dict[str, Any]:
             "timeframe": config.get("asset", {}).get("timeframe", "unknown"),
             "dataset_source": dataset_metadata.get("source_ref"),
             "dataset_mode": dataset_metadata.get("source_mode"),
+            "benchmark_eligible": bool(dataset_metadata.get("benchmark_eligible", False)),
+            "snapshot_path": dataset_metadata.get("snapshot_path"),
+            "snapshot_hash": dataset_metadata.get("snapshot_hash"),
+            "raw_data_hash": dataset_metadata.get("raw_data_hash"),
             "dataset_span_start": _to_utc_iso(dataset_metadata.get("timestamp_start")),
             "dataset_span_end": _to_utc_iso(dataset_metadata.get("timestamp_end")),
             "split_counts": split_counts,
@@ -176,9 +192,11 @@ def build_report_payload(state: AgentState) -> dict[str, Any]:
             "sharpe": _safe_float(run_metrics.get("sharpe")),
             "max_drawdown": _safe_float(run_metrics.get("max_drawdown")),
             "total_return": _safe_float(run_metrics.get("total_return")),
-            "win_rate": _safe_float(trade_summary.get("win_rate", run_metrics.get("win_rate"))),
-            "trade_count": run_trade_count,
-            "avg_trade_return": _safe_float(trade_summary.get("avg_trade_return")),
+            "bar_win_rate": bar_win_rate,
+            "transition_count": run_transition_count,
+            "completed_trade_win_rate": completed_trade_win_rate,
+            "completed_trade_count": run_completed_trade_count,
+            "avg_completed_trade_return": _safe_float(trade_summary.get("avg_trade_return")),
             "profit_factor": trade_summary.get("profit_factor", 0.0),
             "turnover": _safe_float(exposure_stats.get("turnover")),
             "exposure_stats": exposure_stats,
@@ -246,6 +264,10 @@ def render_markdown_report(report: dict[str, Any]) -> str:
         f"- Config Hash: {metadata.get('config_hash')}",
         f"- Asset: {metadata.get('symbol')} ({metadata.get('timeframe')})",
         f"- Dataset Source: {metadata.get('dataset_source')} ({metadata.get('dataset_mode')})",
+        f"- Snapshot Path: {metadata.get('snapshot_path')}",
+        f"- Snapshot Hash: {metadata.get('snapshot_hash')}",
+        f"- Raw Data Hash: {metadata.get('raw_data_hash')}",
+        f"- Benchmark Eligible Input: {metadata.get('benchmark_eligible')}",
         f"- Dataset Span (UTC): {metadata.get('dataset_span_start')} -> {metadata.get('dataset_span_end')}",
         (
             "- Bars: "
@@ -262,9 +284,11 @@ def render_markdown_report(report: dict[str, Any]) -> str:
         f"| Sharpe | {float(kpis.get('sharpe', 0.0)):.4f} |",
         f"| Max Drawdown | {float(kpis.get('max_drawdown', 0.0)) * 100.0:.2f}% |",
         f"| Total Return | {float(kpis.get('total_return', 0.0)) * 100.0:.2f}% |",
-        f"| Win Rate | {float(kpis.get('win_rate', 0.0)) * 100.0:.2f}% |",
-        f"| Trade Count | {int(kpis.get('trade_count', 0))} |",
-        f"| Avg Trade Return | {float(kpis.get('avg_trade_return', 0.0)) * 100.0:.4f}% |",
+        f"| Bar Win Rate | {float(kpis.get('bar_win_rate', 0.0)) * 100.0:.2f}% |",
+        f"| Transition Count | {int(kpis.get('transition_count', 0))} |",
+        f"| Completed Trade Win Rate | {float(kpis.get('completed_trade_win_rate', 0.0)) * 100.0:.2f}% |",
+        f"| Completed Trade Count | {int(kpis.get('completed_trade_count', 0))} |",
+        f"| Avg Completed Trade Return | {float(kpis.get('avg_completed_trade_return', 0.0)) * 100.0:.4f}% |",
         f"| Profit Factor | {kpis.get('profit_factor', 0.0)} |",
         f"| Turnover | {float(kpis.get('turnover', 0.0)):.4f} |",
         f"| Long Exposure | {float(kpis.get('exposure_stats', {}).get('long_exposure_pct', 0.0)) * 100.0:.2f}% |",
@@ -318,6 +342,39 @@ def render_markdown_report(report: dict[str, Any]) -> str:
     )
     for note in data_quality.get("notes", []):
         lines.append(f"- {note}")
+
+    readiness = data_quality.get("readiness", {})
+    if not isinstance(readiness, dict):
+        readiness = {}
+    engineering_validity = readiness.get("engineering_validity", {})
+    if not isinstance(engineering_validity, dict):
+        engineering_validity = {}
+    evidence_sufficiency = readiness.get("evidence_sufficiency", {})
+    if not isinstance(evidence_sufficiency, dict):
+        evidence_sufficiency = {}
+    hard_blockers = readiness.get("hard_blockers", [])
+
+    lines.extend(["", "## Phase Gate", ""])
+    lines.append(f"- Phase Gate Decision: {readiness.get('phase_gate_decision', 'unknown')}")
+    lines.append(f"- Fine-Tuning Gate Open: {readiness.get('fine_tuning_gate_open', False)}")
+    lines.append(
+        f"- Execution Semantics Consistent: {bool(engineering_validity.get('execution_semantics_consistent', False))}"
+    )
+    lines.append(
+        f"- KPI Schema Consistent: {bool(engineering_validity.get('kpi_schema_consistent', False))}"
+    )
+    lines.append(
+        f"- Snapshot-Based Input: {bool(evidence_sufficiency.get('snapshot_based', False))}"
+    )
+    lines.append(
+        f"- Walk-Forward Sufficient: {bool(evidence_sufficiency.get('walk_forward_sufficient', False))}"
+    )
+    if isinstance(hard_blockers, list) and hard_blockers:
+        for blocker in hard_blockers:
+            if isinstance(blocker, dict):
+                lines.append(f"- Hard Blocker [{blocker.get('code', 'unknown')}]: {blocker.get('message', 'n/a')}")
+    else:
+        lines.append("- Hard Blocker: none")
 
     lines.extend(["", "## Failure / Fallbacks", ""])
     if failure:
@@ -384,21 +441,54 @@ def persist_run_artifacts(project_root: Path, state: AgentState) -> Path:
     artifact_dir.mkdir(parents=True, exist_ok=True)
 
     report_payload = build_report_payload(state)
-    report_trade_count = _safe_int(report_payload.get("headline_kpis", {}).get("trade_count"))
+    report_transition_count = _safe_int(report_payload.get("headline_kpis", {}).get("transition_count"))
+    report_completed_trade_count = _safe_int(report_payload.get("headline_kpis", {}).get("completed_trade_count"))
+    report_bar_win_rate = _safe_float(report_payload.get("headline_kpis", {}).get("bar_win_rate"))
+    report_completed_trade_win_rate = _safe_float(
+        report_payload.get("headline_kpis", {}).get("completed_trade_win_rate")
+    )
     run_metrics = dict(state.get("performance", {}).get("run_metrics", {}))
     trade_rows_count = len(list(state.get("trades", [])))
-    has_run_trade_count = run_metrics.get("trade_count") is not None
-    run_trade_count = _safe_int(run_metrics.get("trade_count", trade_rows_count))
-    if report_trade_count != run_trade_count:
-        raise AssertionError(
-            "Report trade_count mismatch: "
-            f"report={report_trade_count}, run_metrics={run_trade_count}"
-        )
-    if has_run_trade_count and trade_rows_count != run_trade_count:
-        raise AssertionError(
-            "Trade rows mismatch: "
-            f"trades={trade_rows_count}, run_metrics={run_trade_count}"
-        )
+    completed_trade_rows_count = len(list(state.get("completed_trades", [])))
+    run_transition_count = _safe_int(run_metrics.get("transition_count", trade_rows_count))
+    run_completed_trade_count = _safe_int(run_metrics.get("completed_trade_count", completed_trade_rows_count))
+    run_bar_win_rate = _safe_float(run_metrics.get("bar_win_rate"))
+    run_completed_trade_win_rate = _safe_float(run_metrics.get("completed_trade_win_rate"))
+    if not state.get("error_info"):
+        if {"win_rate", "trade_count"}.intersection(set(run_metrics.keys())):
+            raise AssertionError(
+                "Ambiguous legacy KPI keys detected in run_metrics; expected explicit schema only."
+            )
+        if report_transition_count != run_transition_count:
+            raise AssertionError(
+                "Report transition_count mismatch: "
+                f"report={report_transition_count}, run_metrics={run_transition_count}"
+            )
+        if report_completed_trade_count != run_completed_trade_count:
+            raise AssertionError(
+                "Report completed_trade_count mismatch: "
+                f"report={report_completed_trade_count}, run_metrics={run_completed_trade_count}"
+            )
+        if abs(report_bar_win_rate - run_bar_win_rate) > 1e-12:
+            raise AssertionError(
+                "Report bar_win_rate mismatch: "
+                f"report={report_bar_win_rate}, run_metrics={run_bar_win_rate}"
+            )
+        if abs(report_completed_trade_win_rate - run_completed_trade_win_rate) > 1e-12:
+            raise AssertionError(
+                "Report completed_trade_win_rate mismatch: "
+                f"report={report_completed_trade_win_rate}, run_metrics={run_completed_trade_win_rate}"
+            )
+        if trade_rows_count != run_transition_count:
+            raise AssertionError(
+                "Trade rows mismatch: "
+                f"trades={trade_rows_count}, run_metrics={run_transition_count}"
+            )
+        if completed_trade_rows_count != run_completed_trade_count:
+            raise AssertionError(
+                "Completed trade rows mismatch: "
+                f"completed_trades={completed_trade_rows_count}, run_metrics={run_completed_trade_count}"
+            )
 
     report_text = render_markdown_report(report_payload)
     (artifact_dir / "report.md").write_text(report_text, encoding="utf-8")
@@ -426,6 +516,7 @@ def persist_run_artifacts(project_root: Path, state: AgentState) -> Path:
     _write_json(artifact_dir / "returns.json", list(state.get("returns", [])), sort_keys=False)
     _write_json(artifact_dir / "benchmark_metrics.json", dict(state.get("performance", {}).get("benchmark_metrics", {})), sort_keys=False)
     _write_json(artifact_dir / "run_metrics.json", dict(state.get("performance", {}).get("run_metrics", {})), sort_keys=False)
+    _write_json(artifact_dir / "readiness.json", dict(state.get("readiness", {})), sort_keys=False)
     _write_json(artifact_dir / "event_counts.json", report_payload.get("event_counts", {}))
     _write_json(artifact_dir / "event_log.json", list(state.get("event_log", [])), sort_keys=False)
     (artifact_dir / "shap_rule.txt").write_text(str(state.get("shap_rule", "")), encoding="utf-8")

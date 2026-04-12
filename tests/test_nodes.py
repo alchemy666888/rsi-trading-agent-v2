@@ -77,7 +77,7 @@ class NodeTests(unittest.TestCase):
         prediction = result["prediction"]
         self.assertIn("prob_up", prediction)
         self.assertEqual(prediction["regime"], "high_volatility")
-        self.assertEqual(prediction["execution_timestamp"], 2_000)
+        self.assertEqual(prediction["execution_timestamp"], 1_000)
 
     def test_evaluate_node_updates_metrics_and_decision_log(self) -> None:
         historical = pl.DataFrame(
@@ -98,7 +98,7 @@ class NodeTests(unittest.TestCase):
                 "prob_up": 0.8,
                 "regime": "normal",
                 "signal_timestamp": 1_000,
-                "execution_timestamp": 2_000,
+                "execution_timestamp": 1_000,
                 "source_model": "fallback",
             },
             "current_row": {"timestamp": 1_000, "close": 100.0, "rsi_14": 55.0},

@@ -5,7 +5,7 @@ asset:
   fetch_limit: 2000
 
 dataset:
-  source_mode: "exchange"
+  source_mode: "snapshot"
 
 snapshot:
   path: "snapshots/btcusdt_15m.parquet"
@@ -59,6 +59,8 @@ walk_forward:
   test_bars: 120
   step_bars: 80
   purge_bars: 5
+  min_folds_per_mode: 2
+  min_total_test_bars: 240
 
 api_keys:
   polygon_api_key: ""
