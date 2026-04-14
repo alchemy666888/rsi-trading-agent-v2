@@ -1187,6 +1187,490 @@ class PipelineTests(unittest.TestCase):
         plan_text = (PROJECT_ROOT / "docs" / "development-plan.md").read_text(encoding="utf-8")
         self.assertIn("BTC 15m data", plan_text)
 
+    def _parity_runtime_loop(
+        self,
+        *,
+        close: np.ndarray,
+        probs: np.ndarray,
+        timestamps: np.ndarray,
+        strategy_params: dict[str, float],
+        risk_cfg: dict,
+        signal_delay_bars: int,
+        slippage_bps: float = 0.0,
+        funding_rate_per_8h: float = 0.0,
+        timeframe: str = "15m",
+    ) -> dict:
+        """Shared parity fixture (plan Workstream C task 2).
+
+        Drive the runtime nodes over the same inputs used by simulate_policy
+        so test expectations can assert the two paths produce identical
+        returns/trades/equity even under risk-triggered closes and reversals.
+        """
+        runtime_cfg = build_test_config()
+        runtime_cfg["asset"]["timeframe"] = timeframe
+        runtime_cfg["simulation"]["slippage_bps"] = slippage_bps
+        runtime_cfg["simulation"]["signal_delay_bars"] = signal_delay_bars
+        runtime_cfg["simulation"]["funding_rate_per_8h"] = funding_rate_per_8h
+        runtime_cfg["risk"] = dict(risk_cfg)
+
+        runtime_state: dict = {
+            "config": runtime_cfg,
+            "historical_data": pl.DataFrame({"timestamp": timestamps, "close": close}),
+            "split_metadata": {"oos_end": len(close) - 1},
+            "cursor": 0,
+            "done": False,
+            "paused": False,
+            "position": 0,
+            "target_position": 0,
+            "proposed_position": 0,
+            "pending_signals": [],
+            "applied_signal": None,
+            "signal_delay_bars_runtime": signal_delay_bars,
+            "entry_price": None,
+            "entry_cycle": None,
+            "entry_timestamp": None,
+            "last_action": "HOLD",
+            "strategy_params": strategy_params,
+            "prediction": {
+                "prob_up": 0.5,
+                "regime": "normal",
+                "signal_timestamp": int(timestamps[0]),
+                "execution_timestamp": int(timestamps[0]),
+                "source_model": "unit_test",
+            },
+            "current_row": {"timestamp": int(timestamps[0]), "close": float(close[0]), "rsi_14": 50.0},
+            "risk_status": {
+                "paused": False,
+                "reasons": [],
+                "stop_triggered": False,
+                "take_profit_triggered": False,
+                "blocked_high_volatility": False,
+            },
+            "returns": [],
+            "equity_curve": [],
+            "trades": [],
+            "trade_history_buffer": [],
+            "completed_trades": [],
+            "decision_log": [],
+            "equity": float(runtime_cfg["simulation"]["initial_equity"]),
+            "performance": {"run_metrics": {}, "benchmark_metrics": {}},
+        }
+
+        for idx in range(len(close) - 1):
+            runtime_state["cursor"] = idx
+            runtime_state["current_row"] = {
+                "timestamp": int(timestamps[idx]),
+                "close": float(close[idx]),
+                "rsi_14": 50.0,
+            }
+            runtime_state["prediction"] = {
+                "prob_up": float(probs[idx]),
+                "regime": "normal",
+                "signal_timestamp": int(timestamps[idx]),
+                "execution_timestamp": int(timestamps[min(idx + signal_delay_bars, len(close) - 2)]),
+                "source_model": "unit_test",
+            }
+            runtime_state.update(risk_node(runtime_state))
+            runtime_state.update(decision_node(runtime_state))
+            runtime_state.update(evaluate_node(runtime_state))
+            if bool(runtime_state.get("paused", False)):
+                break
+        return runtime_state
+
+    def _parity_batch(
+        self,
+        *,
+        close: np.ndarray,
+        probs: np.ndarray,
+        timestamps: np.ndarray,
+        strategy_params: dict[str, float],
+        risk_cfg: dict,
+        signal_delay_bars: int,
+        slippage_bps: float = 0.0,
+        funding_rate_per_8h: float = 0.0,
+        timeframe: str = "15m",
+    ) -> dict:
+        volatility_regime = np.zeros_like(close, dtype=int)
+        return simulate_policy(
+            close=close,
+            probs=probs,
+            volatility_regime=volatility_regime,
+            strategy_params=strategy_params,
+            risk_cfg=risk_cfg,
+            initial_equity=10000.0,
+            slippage_bps=slippage_bps,
+            timestamp=timestamps,
+            signal_delay_bars=signal_delay_bars,
+            funding_rate_per_8h=funding_rate_per_8h,
+            timeframe=timeframe,
+        )
+
+    def test_parity_direction_reversal_under_delay(self) -> None:
+        # Long -> Short reversal sequence with delay=1 and turnover cap allowing
+        # a single-step reversal in one bar (apply_turnover_limit=2).
+        close = np.array([100.0, 101.0, 100.0, 99.0, 98.0, 97.0, 96.0], dtype=float)
+        probs = np.array([0.9, 0.9, 0.9, 0.1, 0.1, 0.1, 0.1], dtype=float)
+        timestamps = np.arange(1, 8, dtype=int)
+        strategy_params = {"long_threshold": 0.6, "short_threshold": 0.4}
+        risk_cfg = {
+            "max_abs_position": 1,
+            "max_turnover_per_bar": 2,
+            "block_high_volatility": False,
+            "stop_loss_pct": 0.0,
+            "take_profit_pct": 0.0,
+            "max_drawdown_pause": 1.0,
+        }
+        batch = self._parity_batch(
+            close=close,
+            probs=probs,
+            timestamps=timestamps,
+            strategy_params=strategy_params,
+            risk_cfg=risk_cfg,
+            signal_delay_bars=1,
+        )
+        runtime = self._parity_runtime_loop(
+            close=close,
+            probs=probs,
+            timestamps=timestamps,
+            strategy_params=strategy_params,
+            risk_cfg=risk_cfg,
+            signal_delay_bars=1,
+        )
+        self.assertEqual(len(batch["returns"]), len(runtime["returns"]))
+        self.assertTrue(np.allclose(batch["returns"], runtime["returns"], atol=1e-12))
+        self.assertTrue(np.allclose(batch["equity_curve"], runtime["equity_curve"], atol=1e-9))
+        self.assertEqual(len(batch["trades"]), len(runtime["trades"]))
+        # Verify at least one reversal in either direction occurred.
+        actions = [trade["action"] for trade in batch["trades"]]
+        self.assertIn("LONG", actions)
+        self.assertIn("SHORT", actions)
+        self.assertEqual(
+            [trade["action"] for trade in runtime["trades"]],
+            actions,
+        )
+
+    def test_parity_stop_loss_close_under_delay(self) -> None:
+        # Constant long bias with a large drawdown that must trigger stop-loss.
+        close = np.array([100.0, 100.0, 90.0, 89.0, 89.0, 89.0], dtype=float)
+        probs = np.full(close.shape, 0.9, dtype=float)
+        timestamps = np.arange(10, 10 + close.size, dtype=int) * 10
+        strategy_params = {"long_threshold": 0.6, "short_threshold": 0.4}
+        risk_cfg = {
+            "max_abs_position": 1,
+            "max_turnover_per_bar": 2,
+            "block_high_volatility": False,
+            "stop_loss_pct": 0.05,
+            "take_profit_pct": 0.0,
+            "max_drawdown_pause": 1.0,
+        }
+        batch = self._parity_batch(
+            close=close,
+            probs=probs,
+            timestamps=timestamps,
+            strategy_params=strategy_params,
+            risk_cfg=risk_cfg,
+            signal_delay_bars=1,
+        )
+        runtime = self._parity_runtime_loop(
+            close=close,
+            probs=probs,
+            timestamps=timestamps,
+            strategy_params=strategy_params,
+            risk_cfg=risk_cfg,
+            signal_delay_bars=1,
+        )
+        self.assertEqual(len(batch["returns"]), len(runtime["returns"]))
+        self.assertTrue(np.allclose(batch["returns"], runtime["returns"], atol=1e-12))
+        self.assertEqual(len(batch["trades"]), len(runtime["trades"]))
+        self.assertEqual(
+            [trade["action"] for trade in batch["trades"]],
+            [trade["action"] for trade in runtime["trades"]],
+        )
+        self.assertEqual(len(batch["completed_trades"]), len(runtime["completed_trades"]))
+
+    def test_parity_take_profit_close_under_delay(self) -> None:
+        close = np.array([100.0, 100.0, 110.0, 111.0, 111.0, 111.0], dtype=float)
+        probs = np.full(close.shape, 0.9, dtype=float)
+        timestamps = np.arange(10, 10 + close.size, dtype=int) * 10
+        strategy_params = {"long_threshold": 0.6, "short_threshold": 0.4}
+        risk_cfg = {
+            "max_abs_position": 1,
+            "max_turnover_per_bar": 2,
+            "block_high_volatility": False,
+            "stop_loss_pct": 0.0,
+            "take_profit_pct": 0.05,
+            "max_drawdown_pause": 1.0,
+        }
+        batch = self._parity_batch(
+            close=close,
+            probs=probs,
+            timestamps=timestamps,
+            strategy_params=strategy_params,
+            risk_cfg=risk_cfg,
+            signal_delay_bars=1,
+        )
+        runtime = self._parity_runtime_loop(
+            close=close,
+            probs=probs,
+            timestamps=timestamps,
+            strategy_params=strategy_params,
+            risk_cfg=risk_cfg,
+            signal_delay_bars=1,
+        )
+        self.assertEqual(len(batch["returns"]), len(runtime["returns"]))
+        self.assertTrue(np.allclose(batch["returns"], runtime["returns"], atol=1e-12))
+        self.assertEqual(len(batch["trades"]), len(runtime["trades"]))
+        self.assertEqual(len(batch["completed_trades"]), len(runtime["completed_trades"]))
+
+    def test_parity_final_bar_no_execution_leak(self) -> None:
+        # Ensure neither path applies an execution on the non-existent bar
+        # after the final observed close (cursor never exceeds oos_end-1).
+        close = np.array([100.0, 101.0, 102.0, 103.0], dtype=float)
+        probs = np.array([0.9, 0.9, 0.9, 0.9], dtype=float)
+        timestamps = np.array([1, 2, 3, 4], dtype=int)
+        strategy_params = {"long_threshold": 0.6, "short_threshold": 0.4}
+        risk_cfg = {
+            "max_abs_position": 1,
+            "max_turnover_per_bar": 1,
+            "block_high_volatility": False,
+            "stop_loss_pct": 0.0,
+            "take_profit_pct": 0.0,
+            "max_drawdown_pause": 1.0,
+        }
+        batch = self._parity_batch(
+            close=close,
+            probs=probs,
+            timestamps=timestamps,
+            strategy_params=strategy_params,
+            risk_cfg=risk_cfg,
+            signal_delay_bars=1,
+        )
+        runtime = self._parity_runtime_loop(
+            close=close,
+            probs=probs,
+            timestamps=timestamps,
+            strategy_params=strategy_params,
+            risk_cfg=risk_cfg,
+            signal_delay_bars=1,
+        )
+        self.assertEqual(len(batch["returns"]), len(close) - 1)
+        self.assertEqual(len(runtime["returns"]), len(close) - 1)
+        self.assertTrue(np.allclose(batch["returns"], runtime["returns"], atol=1e-12))
+        # No trade timestamp should exceed the last observed timestamp.
+        last_ts = int(timestamps[-1])
+        for trade in batch["trades"] + runtime["trades"]:
+            self.assertLessEqual(int(trade["execution_timestamp"]), last_ts)
+
+    def test_evaluate_readiness_triple_green_produces_advance(self) -> None:
+        config = build_test_config()
+        config["readiness"]["min_historical_windows"] = 1
+        readiness = evaluate_readiness(
+            {
+                "config": config,
+                "dataset_metadata": {
+                    "source_mode": "snapshot",
+                    "snapshot_hash": "sha-current",
+                    "raw_data_hash": "raw-current",
+                    "dataset_hash": "ds-current",
+                    "timestamp_start": 10,
+                    "timestamp_end": 20,
+                },
+                "regression_history": [
+                    {
+                        "dataset_window": {
+                            "snapshot_hash": "sha-prev",
+                            "raw_data_hash": "raw-prev",
+                            "dataset_hash": "ds-prev",
+                            "timestamp_start": 1,
+                            "timestamp_end": 5,
+                        }
+                    }
+                ],
+                "optimization_events": [{"objective_value": 0.2}],
+                "trades": [],
+                "completed_trades": [],
+                "performance": {
+                    "run_metrics": {
+                        "sharpe": 0.1,
+                        "bar_win_rate": 0.5,
+                        "transition_count": 0,
+                        "completed_trade_win_rate": 0.0,
+                        "completed_trade_count": 0,
+                    },
+                    "benchmark_metrics": {
+                        "overall": {"mean_sharpe": 0.05},
+                        "sufficiency": {"overall_sufficient": True},
+                    },
+                },
+            }
+        )
+        self.assertEqual(readiness["phase_gate_decision"], "advance")
+        self.assertTrue(readiness["fine_tuning_gate_open"])
+        self.assertEqual(readiness["hard_blockers"], [])
+        self.assertIn("phase_gate_decision=advance", readiness["decision_rationale"])
+        self.assertEqual(readiness["hard_blocker_message_map"], {})
+
+    def test_evaluate_readiness_hard_blocker_closes_fine_tuning_gate(self) -> None:
+        readiness = evaluate_readiness(
+            {
+                "config": build_test_config(),
+                "dataset_metadata": {"source_mode": "exchange"},  # triggers evidence blocker
+                "regression_history": [
+                    {
+                        "dataset_window": {
+                            "snapshot_hash": "sha-a",
+                            "raw_data_hash": "raw-a",
+                            "dataset_hash": "ds-a",
+                            "timestamp_start": 1,
+                            "timestamp_end": 2,
+                        }
+                    }
+                ],
+                "optimization_events": [{"objective_value": 0.2}],
+                "trades": [],
+                "completed_trades": [],
+                "performance": {
+                    "run_metrics": {
+                        "sharpe": 0.1,
+                        "bar_win_rate": 0.5,
+                        "transition_count": 0,
+                        "completed_trade_win_rate": 0.0,
+                        "completed_trade_count": 0,
+                    },
+                    "benchmark_metrics": {
+                        "overall": {"mean_sharpe": 0.05},
+                        "sufficiency": {"overall_sufficient": True},
+                    },
+                },
+            }
+        )
+        self.assertTrue(readiness["hard_blockers"])
+        self.assertEqual(readiness["phase_gate_decision"], "do_not_advance")
+        self.assertFalse(readiness["fine_tuning_gate_open"])
+        self.assertIn(
+            "exchange_mode_not_regression_eligible",
+            readiness["hard_blocker_message_map"],
+        )
+
+    def test_evaluate_readiness_rejects_insufficient_walk_forward_evidence(self) -> None:
+        config = build_test_config()
+        config["readiness"]["min_historical_windows"] = 1
+        readiness = evaluate_readiness(
+            {
+                "config": config,
+                "dataset_metadata": {
+                    "source_mode": "snapshot",
+                    "snapshot_hash": "sha-current",
+                    "raw_data_hash": "raw-current",
+                    "dataset_hash": "ds-current",
+                    "timestamp_start": 10,
+                    "timestamp_end": 20,
+                },
+                "regression_history": [
+                    {
+                        "dataset_window": {
+                            "snapshot_hash": "sha-current",
+                            "raw_data_hash": "raw-current",
+                            "dataset_hash": "ds-current",
+                            "timestamp_start": 10,
+                            "timestamp_end": 20,
+                        }
+                    }
+                ],
+                "optimization_events": [{"objective_value": 0.2}],
+                "trades": [],
+                "completed_trades": [],
+                "performance": {
+                    "run_metrics": {
+                        "sharpe": 0.1,
+                        "bar_win_rate": 0.5,
+                        "transition_count": 0,
+                        "completed_trade_win_rate": 0.0,
+                        "completed_trade_count": 0,
+                    },
+                    "benchmark_metrics": {
+                        "overall": {"mean_sharpe": 0.05},
+                        "sufficiency": {
+                            "overall_sufficient": False,
+                            "reasons": ["expanding fold_count=0 below minimum 2"],
+                        },
+                    },
+                },
+            }
+        )
+        blocker_codes = {row["code"] for row in readiness["hard_blockers"]}
+        self.assertIn("walk_forward_evidence_insufficient", blocker_codes)
+        self.assertEqual(readiness["phase_gate_decision"], "do_not_advance")
+        self.assertFalse(readiness["fine_tuning_gate_open"])
+
+    def test_artifact_consistency_check_rejects_mismatched_readiness(self) -> None:
+        # Inject an inconsistent readiness payload that claims 'advance'
+        # while hard_blockers are present — persistence must refuse.
+        state = self._build_artifact_state(trade_count=1, completed_trade_count=1)
+        state["readiness"] = {
+            "phase_gate_decision": "advance",
+            "fine_tuning_gate_open": True,
+            "hard_blockers": [
+                {
+                    "code": "triple_negative_sharpe",
+                    "message": "Validation, walk-forward, and held-out Sharpe are all negative.",
+                }
+            ],
+        }
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            with self.assertRaises(AssertionError):
+                persist_run_artifacts(Path(tmp_dir), state)
+
+    def test_regression_windows_script_generates_deterministic_starts(self) -> None:
+        # Deterministic runbook contract (plan Workstream D task 4):
+        # _compute_window_starts must yield a fixed, monotonically increasing
+        # list of unique window starts given the same inputs, so N-window
+        # evidence generation is reproducible.
+        scripts_dir = PROJECT_ROOT / "scripts"
+        if str(scripts_dir) not in sys.path:
+            sys.path.insert(0, str(scripts_dir))
+        import importlib
+
+        module = importlib.import_module("run_regression_windows")
+        starts_a = module._compute_window_starts(
+            total_rows=1000, windows=5, window_bars=400, stride_bars=None
+        )
+        starts_b = module._compute_window_starts(
+            total_rows=1000, windows=5, window_bars=400, stride_bars=None
+        )
+        self.assertEqual(starts_a, starts_b)
+        self.assertEqual(len(set(starts_a)), len(starts_a))
+        self.assertEqual(starts_a, sorted(starts_a))
+        for start in starts_a:
+            self.assertGreaterEqual(start, 0)
+            self.assertLessEqual(start + 400, 1000)
+        with self.assertRaises(ValueError):
+            module._compute_window_starts(
+                total_rows=1000, windows=0, window_bars=400, stride_bars=None
+            )
+        with self.assertRaises(ValueError):
+            module._compute_window_starts(
+                total_rows=100, windows=3, window_bars=500, stride_bars=None
+            )
+
+    def test_artifact_consistency_check_persists_metadata_on_success(self) -> None:
+        state = self._build_artifact_state(trade_count=1, completed_trade_count=1)
+        state["readiness"] = {
+            "phase_gate_decision": "do_not_advance",
+            "fine_tuning_gate_open": False,
+            "hard_blockers": [],
+            "decision_rationale": ["engineering_validity=green"],
+        }
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            artifact_path = persist_run_artifacts(Path(tmp_dir), state)
+            consistency_path = artifact_path / "consistency_checks.json"
+            self.assertTrue(consistency_path.exists())
+            payload = json.loads(consistency_path.read_text(encoding="utf-8"))
+            self.assertTrue(payload["overall_ok"])
+            self.assertTrue(payload["kpi_schema_consistent"])
+            self.assertTrue(payload["kpi_counts_consistent"])
+            self.assertTrue(payload["readiness_checks_ok"])
+
 
 if __name__ == "__main__":
     unittest.main()
