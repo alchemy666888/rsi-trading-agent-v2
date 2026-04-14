@@ -319,6 +319,69 @@ def evaluate_readiness(state: AgentState) -> dict[str, Any]:
         )
 
     phase_gate_green = engineering_green and research_green and evidence_green
+    phase_gate_decision = "advance" if phase_gate_green else "do_not_advance"
+    fine_tuning_gate_open = phase_gate_green and multi_window_evidence_sufficient
+
+    # Defensive invariant enforcement (plan Workstream A tasks 2 and 3).
+    # These conditions are transitively guaranteed by the truth table above,
+    # but we assert them explicitly so any future regression trips the gate
+    # before a misleading readiness.json can escape persistence.
+    if not research_green and phase_gate_decision == "advance":
+        raise AssertionError(
+            "Gate invariant violated: research_validity.green=false but phase_gate_decision='advance'."
+        )
+    if not engineering_green and phase_gate_decision == "advance":
+        raise AssertionError(
+            "Gate invariant violated: engineering_validity.green=false but phase_gate_decision='advance'."
+        )
+    if not evidence_green and phase_gate_decision == "advance":
+        raise AssertionError(
+            "Gate invariant violated: evidence_sufficiency.green=false but phase_gate_decision='advance'."
+        )
+    if hard_blockers and fine_tuning_gate_open:
+        raise AssertionError(
+            "Gate invariant violated: hard_blockers present but fine_tuning_gate_open=true."
+        )
+
+    # Explicit blocker-to-message mapping for auditability (plan A.5).
+    blocker_message_map = {
+        str(blocker.get("code", "unknown")): str(blocker.get("message", "n/a"))
+        for blocker in hard_blockers
+        if isinstance(blocker, dict)
+    }
+
+    # Explicit decision rationale enumerates each contribution to the verdict
+    # so downstream automation and audit logs never have to re-derive it.
+    decision_rationale: list[str] = []
+    if engineering_green:
+        decision_rationale.append("engineering_validity=green")
+    else:
+        decision_rationale.append(
+            "engineering_validity=red ("
+            + ",".join(str(b.get("code", "unknown")) for b in engineering_blockers)
+            + ")"
+        )
+    if research_green:
+        decision_rationale.append("research_validity=green")
+    else:
+        decision_rationale.append(
+            "research_validity=red ("
+            + ",".join(str(b.get("code", "unknown")) for b in research_blockers)
+            + ")"
+        )
+    if evidence_green:
+        decision_rationale.append("evidence_sufficiency=green")
+    else:
+        decision_rationale.append(
+            "evidence_sufficiency=red ("
+            + ",".join(str(b.get("code", "unknown")) for b in evidence_blockers)
+            + ")"
+        )
+    decision_rationale.append(
+        f"multi_window_evidence_sufficient={bool(multi_window_evidence_sufficient)}"
+    )
+    decision_rationale.append(f"phase_gate_decision={phase_gate_decision}")
+    decision_rationale.append(f"fine_tuning_gate_open={bool(fine_tuning_gate_open)}")
 
     return {
         "validation_sharpe": validation_sharpe,
@@ -352,8 +415,10 @@ def evaluate_readiness(state: AgentState) -> dict[str, Any]:
             "evidence_blockers": evidence_blockers,
         },
         "hard_blockers": hard_blockers,
-        "phase_gate_decision": "advance" if phase_gate_green else "do_not_advance",
-        "fine_tuning_gate_open": phase_gate_green and multi_window_evidence_sufficient,
+        "hard_blocker_message_map": blocker_message_map,
+        "phase_gate_decision": phase_gate_decision,
+        "fine_tuning_gate_open": fine_tuning_gate_open,
+        "decision_rationale": decision_rationale,
         "warnings": warnings,
     }
 

@@ -1,0 +1,1 @@
+If kama_200 is elevated (current=92219.2506), the model estimate for long probability typically decreases.

@@ -509,6 +509,12 @@ def render_markdown_report(report: dict[str, Any]) -> str:
     else:
         lines.append("- Hard Blocker: none")
 
+    decision_rationale = readiness.get("decision_rationale", [])
+    if isinstance(decision_rationale, list) and decision_rationale:
+        lines.append("- Decision Rationale:")
+        for reason in decision_rationale:
+            lines.append(f"  - {reason}")
+
     lines.extend(["", "## Failure / Fallbacks", ""])
     if failure:
         lines.append(f"- Error Type: {failure.get('error_type')}")
@@ -569,60 +575,148 @@ def _stage_artifact_dir_non_blocking(project_root: Path, artifact_dir: Path, *, 
         return
 
 
-def persist_run_artifacts(project_root: Path, state: AgentState) -> Path:
-    artifact_dir = project_root / str(state.get("artifact_dir", "artifacts/unknown-run"))
-    artifact_dir.mkdir(parents=True, exist_ok=True)
-    artifact_root = artifact_dir.parent
+def _run_artifact_consistency_checks(
+    state: AgentState,
+    report_payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Cross-artifact consistency gate (plan Workstream B).
 
-    report_payload = build_report_payload(state)
-    report_transition_count = _safe_int(report_payload.get("headline_kpis", {}).get("transition_count"))
-    report_completed_trade_count = _safe_int(report_payload.get("headline_kpis", {}).get("completed_trade_count"))
-    report_bar_win_rate = _safe_float(report_payload.get("headline_kpis", {}).get("bar_win_rate"))
-    report_completed_trade_win_rate = _safe_float(
-        report_payload.get("headline_kpis", {}).get("completed_trade_win_rate")
-    )
+    Enforced before any artifact is written. If any contradiction is detected,
+    a single AssertionError is raised with an explicit diagnostic so the
+    persisted bundle is never written in an incoherent state.
+    """
     run_metrics = dict(state.get("performance", {}).get("run_metrics", {}))
+    headline = dict(report_payload.get("headline_kpis", {}))
+    readiness = dict(state.get("readiness", {})) if isinstance(state.get("readiness"), dict) else {}
     trade_rows_count = len(list(state.get("trades", [])))
     completed_trade_rows_count = len(list(state.get("completed_trades", [])))
     run_transition_count = _safe_int(run_metrics.get("transition_count", trade_rows_count))
     run_completed_trade_count = _safe_int(run_metrics.get("completed_trade_count", completed_trade_rows_count))
     run_bar_win_rate = _safe_float(run_metrics.get("bar_win_rate"))
     run_completed_trade_win_rate = _safe_float(run_metrics.get("completed_trade_win_rate"))
+    report_transition_count = _safe_int(headline.get("transition_count"))
+    report_completed_trade_count = _safe_int(headline.get("completed_trade_count"))
+    report_bar_win_rate = _safe_float(headline.get("bar_win_rate"))
+    report_completed_trade_win_rate = _safe_float(headline.get("completed_trade_win_rate"))
+
+    errors: list[str] = []
+    kpi_schema_consistent = True
+    kpi_counts_consistent = True
+
     if not state.get("error_info"):
         if {"win_rate", "trade_count"}.intersection(set(run_metrics.keys())):
-            raise AssertionError(
+            kpi_schema_consistent = False
+            errors.append(
                 "Ambiguous legacy KPI keys detected in run_metrics; expected explicit schema only."
             )
         if report_transition_count != run_transition_count:
-            raise AssertionError(
+            kpi_counts_consistent = False
+            errors.append(
                 "Report transition_count mismatch: "
                 f"report={report_transition_count}, run_metrics={run_transition_count}"
             )
         if report_completed_trade_count != run_completed_trade_count:
-            raise AssertionError(
+            kpi_counts_consistent = False
+            errors.append(
                 "Report completed_trade_count mismatch: "
                 f"report={report_completed_trade_count}, run_metrics={run_completed_trade_count}"
             )
         if abs(report_bar_win_rate - run_bar_win_rate) > 1e-12:
-            raise AssertionError(
+            kpi_counts_consistent = False
+            errors.append(
                 "Report bar_win_rate mismatch: "
                 f"report={report_bar_win_rate}, run_metrics={run_bar_win_rate}"
             )
         if abs(report_completed_trade_win_rate - run_completed_trade_win_rate) > 1e-12:
-            raise AssertionError(
+            kpi_counts_consistent = False
+            errors.append(
                 "Report completed_trade_win_rate mismatch: "
                 f"report={report_completed_trade_win_rate}, run_metrics={run_completed_trade_win_rate}"
             )
         if trade_rows_count != run_transition_count:
-            raise AssertionError(
+            kpi_counts_consistent = False
+            errors.append(
                 "Trade rows mismatch: "
                 f"trades={trade_rows_count}, run_metrics={run_transition_count}"
             )
         if completed_trade_rows_count != run_completed_trade_count:
-            raise AssertionError(
+            kpi_counts_consistent = False
+            errors.append(
                 "Completed trade rows mismatch: "
                 f"completed_trades={completed_trade_rows_count}, run_metrics={run_completed_trade_count}"
             )
+
+    # Readiness-vs-report coherence checks (plan Workstream B task 1).
+    readiness_checks_ok = True
+    readiness_advance_conflict = False
+    readiness_fine_tune_conflict = False
+    hard_blockers = readiness.get("hard_blockers", []) if readiness else []
+    if readiness:
+        decision = str(readiness.get("phase_gate_decision", "unknown"))
+        fine_tuning_open = bool(readiness.get("fine_tuning_gate_open", False))
+        if isinstance(hard_blockers, list) and hard_blockers and decision == "advance":
+            readiness_advance_conflict = True
+            readiness_checks_ok = False
+            errors.append(
+                "Readiness artifact claims 'advance' while hard_blockers are present."
+            )
+        if isinstance(hard_blockers, list) and hard_blockers and fine_tuning_open:
+            readiness_fine_tune_conflict = True
+            readiness_checks_ok = False
+            errors.append(
+                "Readiness artifact claims fine_tuning_gate_open=true while hard_blockers are present."
+            )
+        # If data_quality.readiness (consumed by report.md) exists it must be
+        # the same payload path that feeds readiness.json. Any drift here is
+        # a divergence bug and must fail persistence.
+        report_readiness = report_payload.get("data_quality", {}).get("readiness", {})
+        if isinstance(report_readiness, dict) and report_readiness:
+            if str(report_readiness.get("phase_gate_decision", "")) != decision:
+                readiness_checks_ok = False
+                errors.append(
+                    "report payload phase_gate_decision does not match readiness payload."
+                )
+            if bool(report_readiness.get("fine_tuning_gate_open", False)) != fine_tuning_open:
+                readiness_checks_ok = False
+                errors.append(
+                    "report payload fine_tuning_gate_open does not match readiness payload."
+                )
+
+    overall_ok = not errors
+
+    return {
+        "generated_at_utc": _utc_now(),
+        "kpi_schema_consistent": kpi_schema_consistent,
+        "kpi_counts_consistent": kpi_counts_consistent,
+        "readiness_checks_ok": readiness_checks_ok,
+        "readiness_advance_conflict": readiness_advance_conflict,
+        "readiness_fine_tune_conflict": readiness_fine_tune_conflict,
+        "trade_rows_count": trade_rows_count,
+        "completed_trade_rows_count": completed_trade_rows_count,
+        "run_transition_count": run_transition_count,
+        "run_completed_trade_count": run_completed_trade_count,
+        "report_transition_count": report_transition_count,
+        "report_completed_trade_count": report_completed_trade_count,
+        "hard_blocker_count": len(hard_blockers) if isinstance(hard_blockers, list) else 0,
+        "errors": errors,
+        "overall_ok": overall_ok,
+    }
+
+
+def persist_run_artifacts(project_root: Path, state: AgentState) -> Path:
+    artifact_dir = project_root / str(state.get("artifact_dir", "artifacts/unknown-run"))
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    artifact_root = artifact_dir.parent
+
+    report_payload = build_report_payload(state)
+    consistency_report = _run_artifact_consistency_checks(state, report_payload)
+    if not consistency_report["overall_ok"]:
+        # Atomic persistence contract: if any contradiction is detected we
+        # refuse to write the bundle and surface the full error list.
+        raise AssertionError(
+            "Artifact consistency checks failed: "
+            + "; ".join(consistency_report["errors"])
+        )
 
     report_text = render_markdown_report(report_payload)
     (artifact_dir / "report.md").write_text(report_text, encoding="utf-8")
@@ -657,6 +751,7 @@ def persist_run_artifacts(project_root: Path, state: AgentState) -> Path:
     )
     _write_json(artifact_dir / "run_metrics.json", dict(state.get("performance", {}).get("run_metrics", {})), sort_keys=False)
     _write_json(artifact_dir / "readiness.json", dict(state.get("readiness", {})), sort_keys=False)
+    _write_json(artifact_dir / "consistency_checks.json", consistency_report, sort_keys=False)
     _write_json(artifact_dir / "event_counts.json", report_payload.get("event_counts", {}))
     _write_json(artifact_dir / "event_log.json", list(state.get("event_log", [])), sort_keys=False)
     (artifact_dir / "shap_rule.txt").write_text(str(state.get("shap_rule", "")), encoding="utf-8")

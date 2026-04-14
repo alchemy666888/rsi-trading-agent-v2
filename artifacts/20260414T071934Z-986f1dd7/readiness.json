@@ -1,0 +1,66 @@
+{
+  "validation_sharpe": -16.1192559850337,
+  "walk_forward_mean_sharpe": -56.63605221744753,
+  "held_out_sharpe": -7.958002682159639,
+  "bad_research_performance": {
+    "triple_negative_sharpe": true
+  },
+  "engineering_validity": {
+    "green": true,
+    "execution_semantics_consistent": true,
+    "kpi_schema_consistent": true,
+    "engineering_blockers": []
+  },
+  "research_validity": {
+    "green": false,
+    "triple_negative_sharpe": true,
+    "degenerate_threshold_calibration": false,
+    "research_blockers": [
+      {
+        "code": "triple_negative_sharpe",
+        "message": "Validation, walk-forward, and held-out Sharpe are all negative.",
+        "validation_sharpe": -16.1192559850337,
+        "walk_forward_mean_sharpe": -56.63605221744753,
+        "held_out_sharpe": -7.958002682159639
+      }
+    ]
+  },
+  "evidence_sufficiency": {
+    "green": true,
+    "snapshot_based": true,
+    "walk_forward_sufficient": true,
+    "benchmark_sufficiency_artifact_available": true,
+    "regression_tracking_available": true,
+    "regression_history_entry_count": 10,
+    "historical_window_count": 7,
+    "minimum_historical_windows": 5,
+    "multi_window_evidence_sufficient": true,
+    "evidence_blockers": []
+  },
+  "hard_blockers": [
+    {
+      "code": "triple_negative_sharpe",
+      "message": "Validation, walk-forward, and held-out Sharpe are all negative.",
+      "validation_sharpe": -16.1192559850337,
+      "walk_forward_mean_sharpe": -56.63605221744753,
+      "held_out_sharpe": -7.958002682159639
+    }
+  ],
+  "hard_blocker_message_map": {
+    "triple_negative_sharpe": "Validation, walk-forward, and held-out Sharpe are all negative."
+  },
+  "phase_gate_decision": "do_not_advance",
+  "fine_tuning_gate_open": false,
+  "decision_rationale": [
+    "engineering_validity=green",
+    "research_validity=red (triple_negative_sharpe)",
+    "evidence_sufficiency=green",
+    "multi_window_evidence_sufficient=True",
+    "phase_gate_decision=do_not_advance",
+    "fine_tuning_gate_open=False"
+  ],
+  "warnings": [
+    "Validation Sharpe, walk-forward mean Sharpe, and held-out Sharpe are all negative.",
+    "Readiness hard blockers are present; do not advance to fine-tuning or next phase."
+  ]
+}
